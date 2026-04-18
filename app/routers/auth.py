@@ -119,10 +119,10 @@ async def set_pin(b: PinReq, request: Request, uid: str = Depends(get_user)):
         raise HTTPException(400, "PIN 4 ta raqam bo'lishi kerak")
     hashed = hash_pin(b.pin)
     await database.execute(
-    "UPDATE users SET pin_hash=:h WHERE id=:id", {"h": hashed, "id": uid}
+         "UPDATE users SET pin_hash=:h WHERE id=:id", {"h": hashed, "id": uid}
         )
-        await audit.log("pin_set", user_id=uid, ip_address=get_client_ip(request))
-        return {"success": True}
+    await audit.log("pin_set", user_id=uid, ip_address=get_client_ip(request))
+    return {"success": True}
 
 
     @router.post("/verify-pin")
