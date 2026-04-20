@@ -58,7 +58,8 @@ async def send_otp(b: OTPReq, request: Request):
     await audit.log("otp_sent", entity_type="phone", entity_id=b.phone, ip_address=ip)
 
     res = {"success": True, "isNewUser": user is None, "message": "Kod yuborildi"}
-    if ENV == "development":
+    eskiz_activated = os.getenv("ESKIZ_ACTIVATED", "false").lower() == "true"
+    if not eskiz_activated:
         res["devCode"] = code
     return res
 
