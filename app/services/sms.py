@@ -6,7 +6,7 @@ load_dotenv()
 
 ENV      = os.getenv("NODE_ENV", "development")
 SMS_URL  = os.getenv("SMS_API_URL", "https://notify.eskiz.uz/api")
-SMS_FROM = os.getenv("SMS_FROM", "Oson Pay")
+SMS_FROM = os.getenv("SMS_FROM", "4546")
 EMAIL    = os.getenv("SMS_EMAIL", "")
 PASSWORD = os.getenv("SMS_PASSWORD", "")
 
@@ -37,19 +37,36 @@ async def send_sms(phone: str, msg: str) -> bool:
     if not EMAIL or not PASSWORD:
         print(f"[SMS] Kredensial yo'q")
         return False
-    clean = phone.replace("+","").replace(" ","")
+
+    # Eskiz test rejimida faqat ruxsat etilgan matn ishlatiladi.
+    # Hisob aktivlashtirilgandan keyin bu qatorni olib tashlang.
+    eskiz_activated = os.getenv("ESKIZ_ACTIVATED", "false").lower() == "true"
+    if not eskiz_activated:
+        # OTP kodni matn ichidan ajratib olib test formatga solish
+        import re
+        codes = re.findall(r'\b\d{6}\b', msg)
+        if codes:
+            msg = f"Bu Eskiz dan test {codes[0]}"
+        else:
+            msg = "Bu Eskiz dan test"
+
+    clean = phone.replace("+", "").replace(" ", "")
     try:
         token = await _get_token()
         async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.post(f"{SMS_URL}/message/sms/send",
+            r = await c.post(
+                f"{SMS_URL}/message/sms/send",
                 json={"mobile_phone": clean, "message": msg, "from": SMS_FROM, "callback_url": ""},
-                headers={"Authorization": f"Bearer {token}"})
+                headers={"Authorization": f"Bearer {token}"}
+            )
             data = r.json()
             if r.status_code == 401 or data.get("status") == "token_invalid":
                 token = await _refresh_token()
-                r = await c.post(f"{SMS_URL}/message/sms/send",
+                r = await c.post(
+                    f"{SMS_URL}/message/sms/send",
                     json={"mobile_phone": clean, "message": msg, "from": SMS_FROM},
-                    headers={"Authorization": f"Bearer {token}"})
+                    headers={"Authorization": f"Bearer {token}"}
+                )
                 data = r.json()
             ok = data.get("status") == "waiting" or bool(data.get("id"))
             print(f"[SMS] {'OK' if ok else 'XATO'}: {phone} — {data}")
