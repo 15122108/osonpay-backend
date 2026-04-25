@@ -169,4 +169,5 @@ async def history(
     type: Optional[str] = None,
     uid: str = Depends(get_user)
 ):
-    if​​​​​​​​​​​​​​​​
+   if limit > 100:
+           limit = 100
