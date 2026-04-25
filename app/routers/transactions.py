@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Request
+[26.04.2026 4:00] Farhod: from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import Optional
 from app.database import database
@@ -106,17 +106,23 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
         )
 
     await audit.log(
-        action="money_sent", user_id=uid,
-        entity_type="transaction", entity_id=str(tx["id"]),
-        details={"amount": b.amount, "receiver": b.receiverPhone,
-                 "ref": ref, "fraud_risk": fraud["risk"]},
+        action="money_sent",
+        user_id=uid,
+        entity_type="transaction",
+        entity_id=str(tx["id"]),
+        details={
+            "amount": b.amount,
+            "receiver": b.receiverPhone,
+            "ref": ref,
+            "fraud_risk": fraud["risk"]
+        },
         ip_address=ip
     )
 
     await notify_transaction(
-        database,
+[26.04.2026 4:00] Farhod: database,
         receiver_id=str(rec["id"]),
- sender_name=sender["full_name"] or "Foydalanuvchi",
+        sender_name=sender["full_name"] or "Foydalanuvchi",
         amount=b.amount,
         ref=ref
     )
@@ -154,8 +160,10 @@ async def topup(b: TopUpReq, request: Request, uid: str = Depends(get_user)):
         )
 
     await audit.log(
-        action="wallet_topup", user_id=uid,
-        entity_type="transaction", entity_id=str(tx["id"]),
+        action="wallet_topup",
+        user_id=uid,
+        entity_type="transaction",
+        entity_id=str(tx["id"]),
         details={"amount": b.amount, "ref": ref},
         ip_address=ip
     )
@@ -169,5 +177,40 @@ async def history(
     type: Optional[str] = None,
     uid: str = Depends(get_user)
 ):
-   if limit > 100:
-           limit = 100
+    if limit > 100:
+        limit = 100
+
+    offset = (page - 1) * limit
+    filters = ""
+    params = {"uid": uid, "limit": limit, "offset": offset}
+
+    if type:
+        filters = "AND t.type = :type"
+        params["type"] = type
+
+    rows = await database.fetch_all(
+        f"""SELECT t.*,
+               s.full_name as sender_name, s.phone as sender_phone,
+               r.full_name as receiver_name, r.phone as receiver_phone
+            FROM transactions t
+            LEFT JOIN users s ON s.id = t.sender_id
+            LEFT JOIN users r ON r.id = t.receiver_id
+            WHERE (t.sender_id=:uid OR t.receiver_id=:uid)
+            {filters}
+            ORDER BY t.created_at DESC
+            LIMIT :limit OFFSET :offset""",
+        params
+    )
+
+    total = await database.fetch_one(
+        f"""SELECT COUNT(*) as cnt FROM transactions t
+            WHERE (t.sender_id=:uid OR t.receiver_id=:uid) {filters}""",
+        {k: v for k, v in params.items() if k != "limit" and k != "offset"}
+    )
+
+    return {
+        "transactions": [dict(r) for r in rows],
+        "total": total["cnt"],
+        "page": page,
+        "limit": limit
+    }
