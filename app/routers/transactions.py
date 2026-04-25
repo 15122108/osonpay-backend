@@ -1,4 +1,4 @@
-[26.04.2026 4:00] Farhod: from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import Optional
 from app.database import database
@@ -120,7 +120,7 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
     )
 
     await notify_transaction(
-[26.04.2026 4:00] Farhod: database,
+        database,
         receiver_id=str(rec["id"]),
         sender_name=sender["full_name"] or "Foydalanuvchi",
         amount=b.amount,
