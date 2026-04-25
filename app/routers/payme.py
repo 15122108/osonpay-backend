@@ -139,7 +139,7 @@ async def perform_transaction(req_id, params):
     payme_tx_id = params.get("id")
 
     tx = await database.fetch_one(
-[26.04.2026 4:35] Farhod: "SELECT * FROM payme_transactions WHERE payme_id=:pid",
+ "SELECT * FROM payme_transactions WHERE payme_id=:pid",
         {"pid": payme_tx_id}
     )
     if not tx:
