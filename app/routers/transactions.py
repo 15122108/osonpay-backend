@@ -1,4 +1,4 @@
-[25.04.2026 22:58] Farhod: from fastapi import APIRouter, HTTPException, Depends, Request
+[25.04.2026 23:25] Farhod: from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import Optional
 from app.database import database
@@ -116,7 +116,7 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
     await notify_transaction(
         database,
         receiver_id=str(rec["id"]),
-[25.04.2026 22:58] Farhod: sender_name=sender["full_name"] or "Foydalanuvchi",
+[25.04.2026 23:25] Farhod: sender_name=sender["full_name"] or "Foydalanuvchi",
         amount=b.amount,
         ref=ref
     )
@@ -169,78 +169,4 @@ async def history(
     type: Optional[str] = None,
     uid: str = Depends(get_user)
 ):
-    if limit > 100:
-        limit = 100
-    offset = (page - 1) * limit
-    where = "WHERE (t.sender_id=:uid OR t.receiver_id=:uid)"
-    params: dict = {"uid": uid, "limit": limit, "offset": offset}
-    if type:
-        where += " AND t.type=:type"
-        params["type"] = type
-
-    txs = await database.fetch_all(
-        f"""SELECT t.*,
-            CASE WHEN t.sender_id=:uid THEN 'debit' ELSE 'credit' END as direction,
-            s.full_name as sender_name, s.phone as sender_phone,
-            r.full_name as receiver_name, r.phone as receiver_phone
-           FROM transactions t
-           LEFT JOIN users s ON s.id=t.sender_id
-           LEFT JOIN users r ON r.id=t.receiver_id
-           {where}
-           ORDER BY t.created_at DESC
-           LIMIT :limit OFFSET :offset""",
-        params
-    )
-    count = await database.fetch_one(
-        f"SELECT COUNT(*) as total FROM transactions t {where}",
-        {"uid": uid}
-    )
-    return {
-        "success": True,
-        "transactions": [dict(t) for t in txs],
-        "pagination": {"page": page, "total": count["total"], "limit": limit}
-    }
-
-
-@router.get("/stats")
-async def stats(uid: str = Depends(get_user)):
-    s = await database.fetch_one(
-        """SELECT
-            COALESCE(SUM(CASE WHEN receiver_id=:uid AND type IN ('receive','topup') THEN amount ELSE 0 END),0) as total_in,
-            COALESCE(SUM(CASE WHEN sender_id=:uid AND type IN ('send','payment') THEN amount ELSE 0 END),0) as total_out,
-            COUNT(*) as total_count
-           FROM transactions
-           WHERE (sender_id=:uid OR receiver_id=:uid) AND status='completed'""",
-        {"uid": uid}
-    )
-    w = await database.fetch_one(
-        "SELECT balance FROM wallets WHERE user_id=:uid", {"uid": uid}
-    )
-    return {
-        "success": True,
-        "stats": {
-            "total_in":    float(s["total_in"]),
-            "total_out":   float(s["total_out"]),
-            "total_count": s["total_count"],
-            "balance":     float(w["balance"]) if w else 0
-        }
-    }
-
-
-@router.get("/{tx_id}")
-async def get_tx(tx_id: str, uid: str = Depends(get_user)):
-    tx = await database.fetch_one(
-        """SELECT t.*,
-            CASE WHEN t.sender_id=:uid THEN 'debit' ELSE 'credit' END as direction,
-            s.full_name as sender_name, s.phone as sender_phone,
-            r.full_name as receiver_name, r.
-[25.04.2026 22:58] Farhod: phone as receiver_phone
-           FROM transactions t
-           LEFT JOIN users s ON s.id=t.sender_id
-           LEFT JOIN users r ON r.id=t.receiver_id
-           WHERE t.id=:id AND (t.sender_id=:uid OR t.receiver_id=:uid)""",
-        {"id": tx_id, "uid": uid}
-    )
-    if not tx:
-        raise HTTPException(404, "Topilmadi")
-    return {"success": True, "transaction": dict(tx)}
+    if​​​​​​​​​​​​​​​​
