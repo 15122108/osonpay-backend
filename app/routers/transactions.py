@@ -116,7 +116,7 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
     await notify_transaction(
         database,
         receiver_id=str(rec["id"]),
-[25.04.2026 23:25] Farhod: sender_name=sender["full_name"] or "Foydalanuvchi",
+ sender_name=sender["full_name"] or "Foydalanuvchi",
         amount=b.amount,
         ref=ref
     )
