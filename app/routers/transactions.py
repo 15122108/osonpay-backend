@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Request
+[25.04.2026 22:58] Farhod: from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import Optional
 from app.database import database
@@ -70,7 +70,6 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
     if rec["is_frozen"]:
         raise HTTPException(400, "Qabul qiluvchi hisobi muzlatilgan")
 
-    # AI FRAUD NAZORAT
     fraud = await check_transaction(
         sender_id=uid,
         receiver_id=str(rec["id"]),
@@ -88,7 +87,6 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
 
     ref = gen_ref()
 
-    # ATOMIC TRANSACTION — pul xavfsiz
     async with database.transaction():
         await database.execute(
             "UPDATE wallets SET balance=balance-:a, updated_at=NOW() WHERE user_id=:id",
@@ -110,15 +108,15 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
     await audit.log(
         action="money_sent", user_id=uid,
         entity_type="transaction", entity_id=str(tx["id"]),
-        details={"amount": b.amount, "receiver": b.receiverPhone, "ref": ref,
-                 "fraud_risk": fraud["risk"]},
+        details={"amount": b.amount, "receiver": b.receiverPhone,
+                 "ref": ref, "fraud_risk": fraud["risk"]},
         ip_address=ip
     )
 
     await notify_transaction(
         database,
         receiver_id=str(rec["id"]),
-        sender_name=sender["full_name"] or "Foydalanuvchi",
+[25.04.2026 22:58] Farhod: sender_name=sender["full_name"] or "Foydalanuvchi",
         amount=b.amount,
         ref=ref
     )
@@ -130,9 +128,9 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
 async def topup(b: TopUpReq, request: Request, uid: str = Depends(get_user)):
     ip = get_client_ip(request)
     if b.amount < 1000:
-        raise HTTPException(400, "Minimum 1,000 UZS")
+        raise HTTPException(400, "Minimal 1,000 UZS")
     if b.amount > 100_000_000:
-        raise HTTPException(400, "Maksimum 100,000,000 UZS")
+        raise HTTPException(400, "Maksimal 100,000,000 UZS")
 
     wallet = await database.fetch_one(
         "SELECT is_frozen FROM wallets WHERE user_id=:uid", {"uid": uid}
@@ -151,7 +149,8 @@ async def topup(b: TopUpReq, request: Request, uid: str = Depends(get_user)):
                (receiver_id, amount, type, status, description, reference)
                VALUES (:u, :a, 'topup', 'completed', :d, :ref)
                RETURNING *""",
-            {"u": uid, "a": b.amount, "d": b.description or "To'ldirish", "ref": ref}
+            {"u": uid, "a": b.amount,
+             "d": b.description or "To'ldirish", "ref": ref}
         )
 
     await audit.log(
@@ -165,14 +164,16 @@ async def topup(b: TopUpReq, request: Request, uid: str = Depends(get_user)):
 
 @router.get("")
 async def history(
-    page: int = 1, limit: int = 20,
+    page: int = 1,
+    limit: int = 20,
     type: Optional[str] = None,
     uid: str = Depends(get_user)
 ):
-    if limit > 100: limit = 100
+    if limit > 100:
+        limit = 100
     offset = (page - 1) * limit
     where = "WHERE (t.sender_id=:uid OR t.receiver_id=:uid)"
-    params = {"uid": uid, "limit": limit, "offset": offset}
+    params: dict = {"uid": uid, "limit": limit, "offset": offset}
     if type:
         where += " AND t.type=:type"
         params["type"] = type
@@ -191,7 +192,8 @@ async def history(
         params
     )
     count = await database.fetch_one(
-        f"SELECT COUNT(*) as total FROM transactions t {where}", {"uid": uid}
+        f"SELECT COUNT(*) as total FROM transactions t {where}",
+        {"uid": uid}
     )
     return {
         "success": True,
@@ -220,7 +222,7 @@ async def stats(uid: str = Depends(get_user)):
             "total_in":    float(s["total_in"]),
             "total_out":   float(s["total_out"]),
             "total_count": s["total_count"],
-            "balance":     float(w["balance"] if w else 0)
+            "balance":     float(w["balance"]) if w else 0
         }
     }
 
@@ -231,7 +233,8 @@ async def get_tx(tx_id: str, uid: str = Depends(get_user)):
         """SELECT t.*,
             CASE WHEN t.sender_id=:uid THEN 'debit' ELSE 'credit' END as direction,
             s.full_name as sender_name, s.phone as sender_phone,
-            r.full_name as receiver_name, r.phone as receiver_phone
+            r.full_name as receiver_name, r.
+[25.04.2026 22:58] Farhod: phone as receiver_phone
            FROM transactions t
            LEFT JOIN users s ON s.id=t.sender_id
            LEFT JOIN users r ON r.id=t.receiver_id
