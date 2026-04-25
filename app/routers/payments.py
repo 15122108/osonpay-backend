@@ -1,249 +1,241 @@
-from fastapi import APIRouter, HTTPException, Depends, Request, BackgroundTasks
-from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+import base64
+import hashlib
+import time
+from fastapi import APIRouter, Request, HTTPException
 from app.database import database
-from app.utils.deps import get_user
-from app.utils.auth import gen_ref
-from app.utils.rate_limit import get_client_ip
-from app.utils import audit
-from app.services.paytech import (
-    create_topup_payment,
-    get_payment_status,
-    verify_webhook_signature,
-    parse_webhook,
-)
-from app.services.fcm import get_user_tokens, send_push
-import json
+import os
 
 router = APIRouter()
 
-FRONTEND_DEEP_LINK = "osonpay://payment"   # Mobil ilova deep link
+PAYME_KEY = os.getenv("PAYME_KEY")  # Render environment variable dan
+PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID")
+
+# Payme error kodlari
+ERR_INVALID_JSON      = -32700
+ERR_METHOD_NOT_FOUND  = -32601
+ERR_INVALID_AMOUNT    = -31001
+ERR_INVALID_ACCOUNT   = -31050
+ERR_TX_NOT_FOUND      = -31003
+ERR_CANT_PERFORM      = -31008
+ERR_ALREADY_DONE      = -31060
 
 
-class TopupInitReq(BaseModel):
-    amount: float
+def check_auth(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(auth[6:]).decode("utf-8")
+        login, password = decoded.split(":", 1)
+        return password == PAYME_KEY
+    except Exception:
+        return False
 
 
-@router.post("/topup/init")
-async def topup_init(b: TopupInitReq, request: Request, uid: str = Depends(get_user)):
-    """
-    1-qadam: To'lov yaratish → redirectUrl qaytarish
-    Frontend bu URL ni WebView da ochadi
-    """
-    ip = get_client_ip(request)
+def ok(request_id, result):
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
-    if b.amount < 1000:
-        raise HTTPException(400, "Minimum 1,000 UZS")
-    if b.amount > 50_000_000:
-        raise HTTPException(400, "Maksimum 50,000,000 UZS")
+
+def err(request_id, code, message):
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": code, "message": {"uz": message, "ru": message, "en": message}}
+    }
+
+
+@router.post("/payme")
+async def payme_webhook(request: Request):
+    # Auth tekshirish
+    if not check_auth(request):
+        body = await request.json()
+        return err(body.get("id"), -32504, "Autentifikatsiya xatosi")
+
+    body = await request.json()
+    method = body.get("method")
+    params = body.get("params", {})
+    req_id = body.get("id")
+
+    if method == "CheckPerformTransaction":
+        return await check_perform(req_id, params)
+    elif method == "CreateTransaction":
+        return await create_transaction(req_id, params)
+    elif method == "PerformTransaction":
+        return await perform_transaction(req_id, params)
+    elif method == "CheckTransaction":
+        return await check_transaction(req_id, params)
+    elif method == "CancelTransaction":
+        return await cancel_transaction(req_id, params)
+    else:
+        return err(req_id, ERR_METHOD_NOT_FOUND, "Method topilmadi")
+
+
+async def check_perform(req_id, params):
+    amount = params.get("amount", 0)
+    account = params.get("account", {})
+    order_id = account.get("order_id")
+
+    # Summa tekshirish (tiyin, 1000-50000000 UZS = 100000-5000000000 tiyin)
+    if not (100_000 <= amount <= 5_000_000_000):
+        return err(req_id, ERR_INVALID_AMOUNT, "Summa xato")
+
+    # Hisob tekshirish
+    if not order_id:
+        return err(req_id, ERR_INVALID_ACCOUNT, "order_id yo'q")
 
     user = await database.fetch_one(
-        "SELECT phone, full_name FROM users WHERE id=:uid", {"uid": uid}
+        "SELECT id FROM users WHERE id=:oid OR phone=:oid",
+        {"oid": str(order_id)}
     )
     if not user:
-        raise HTTPException(404, "Foydalanuvchi topilmadi")
+        return err(req_id, ERR_INVALID_ACCOUNT, "Foydalanuvchi topilmadi")
 
-    wallet = await database.fetch_one(
-        "SELECT is_frozen FROM wallets WHERE user_id=:uid", {"uid": uid}
+    return ok(req_id, {"allow": True})
+
+
+async def create_transaction(req_id, params):
+    payme_tx_id = params.get("id")
+    amount = params.get("amount", 0)
+    account = params.get("account", {})
+    order_id = account.get("order_id")
+    create_time = params.get("time", int(time.time() * 1000))
+
+    if not (100_000 <= amount <= 5_000_000_000):
+        return err(req_id, ERR_INVALID_AMOUNT, "Summa xato")
+
+    user = await database.fetch_one(
+        "SELECT id FROM users WHERE id=:oid OR phone=:oid",
+        {"oid": str(order_id)}
     )
-    if wallet and wallet["is_frozen"]:
-        raise HTTPException(403, "Hisobingiz muzlatilgan")
+    if not user:
+        return err(req_id, ERR_INVALID_ACCOUNT, "Foydalanuvchi topilmadi")
 
-    ref = gen_ref()
+    # Mavjud tranzaksiyani tekshirish
+    existing = await database.fetch_one(
+        "SELECT * FROM payme_transactions WHERE payme_id=:pid",
+        {"pid": payme_tx_id}
+    )
+    if existing:
+        if existing["state"] != 1:
+            return err(req_id, ERR_CANT_PERFORM, "Tranzaksiya holati xato")
+        return ok(req_id, {
+            "create_time": existing["create_time"],
+            "transaction": str(existing["id"]),
+            "state": 1
+        })
 
-    # PayTech da to'lov yaratish
-    try:
-        result = await create_topup_payment(
-            user_id=uid,
-            amount=b.amount,
-            phone=user["phone"],
-            full_name=user["full_name"] or "Foydalanuvchi",
-            reference_id=ref,
-        )
-    except Exception as e:
-        raise HTTPException(502, f"To'lov tizimi xatosi: {str(e)}")
-
-    # Kutayotgan to'lovni DBga yozish
-    await database.execute(
-        """INSERT INTO pending_payments
-           (user_id, amount, reference, paytech_payment_id, status)
-           VALUES (:uid, :amt, :ref, :pid, 'pending')""",
-        {
-            "uid": uid,
-            "amt": b.amount,
-            "ref": ref,
-            "pid": result["payment_id"],
-        }
+    # Yangi tranzaksiya yaratish
+    tx = await database.fetch_one(
+        """INSERT INTO payme_transactions
+           (payme_id, user_id, amount, state, create_time)
+           VALUES (:pid, :uid, :amt, 1, :ct)
+[26.04.2026 4:23] Farhod: RETURNING *""",
+        {"pid": payme_tx_id, "uid": str(user["id"]),
+         "amt": amount, "ct": create_time}
     )
 
-    await audit.log(
-        action="topup_initiated",
-        user_id=uid,
-        details={"amount": b.amount, "ref": ref, "payment_id": result["payment_id"]},
-        ip_address=ip
+    return ok(req_id, {
+        "create_time": create_time,
+        "transaction": str(tx["id"]),
+        "state": 1
+    })
+
+
+async def perform_transaction(req_id, params):
+    payme_tx_id = params.get("id")
+
+    tx = await database.fetch_one(
+        "SELECT * FROM payme_transactions WHERE payme_id=:pid",
+        {"pid": payme_tx_id}
     )
+    if not tx:
+        return err(req_id, ERR_TX_NOT_FOUND, "Tranzaksiya topilmadi")
 
-    return {
-        "success":      True,
-        "redirectUrl":  result["redirect_url"],
-        "paymentId":    result["payment_id"],
-        "reference":    ref,
-        "amount":       b.amount,
-    }
+    if tx["state"] == 2:
+        return ok(req_id, {
+            "transaction": str(tx["id"]),
+            "perform_time": tx["perform_time"],
+            "state": 2
+        })
 
+    if tx["state"] != 1:
+        return err(req_id, ERR_CANT_PERFORM, "Tranzaksiya holati xato")
 
-@router.get("/topup/status/{payment_id}")
-async def topup_status(payment_id: str, uid: str = Depends(get_user)):
-    """To'lov holatini tekshirish (polling uchun)"""
-    pending = await database.fetch_one(
-        "SELECT * FROM pending_payments WHERE paytech_payment_id=:pid AND user_id=:uid",
-        {"pid": payment_id, "uid": uid}
-    )
-    if not pending:
-        raise HTTPException(404, "To'lov topilmadi")
+    perform_time = int(time.time() * 1000)
+    amount_uzs = tx["amount"] / 100  # tiyin → UZS
 
-    # Agar allaqachon yakunlangan bo'lsa — DBdan qaytarish
-    if pending["status"] in ("completed", "failed"):
-        return {
-            "success": True,
-            "status":  pending["status"],
-            "amount":  float(pending["amount"]),
-        }
-
-    # PayTech dan hozirgi holat
-    try:
-        status = await get_payment_status(payment_id)
-    except Exception:
-        return {"success": True, "status": pending["status"]}
-
-    state = status.get("state", "")
-
-    if state == "COMPLETED":
-        # Pul hisob balansiga qo'shiladi — webhook ham buni qiladi
-        # Bu faqat polling uchun — ikki marta qo'shilmasin deb tekshiramiz
-        already = await database.fetch_one(
-            "SELECT id FROM pending_payments WHERE paytech_payment_id=:pid AND status='completed'",
-            {"pid": payment_id}
-        )
-        if not already:
-            await _credit_user(uid, float(pending["amount"]), pending["reference"], payment_id)
-
-    return {
-        "success": True,
-        "status":  state.lower() if state else "pending",
-        "amount":  float(pending["amount"]),
-    }
-
-
-@router.post("/webhook")
-async def paytech_webhook(request: Request, background_tasks: BackgroundTasks):
-    """
-    PayTech webhook — to'lov yakunlanganda chaqiriladi.
-    COMPLETED → foydalanuvchi balansiga pul qo'shiladi.
-    """
-    body_bytes = await request.body()
-    signature  = request.headers.get("Signature", "")
-
-    # Imzoni tekshirish
-    if not verify_webhook_signature(body_bytes, signature):
-        raise HTTPException(400, "Webhook imzo xato")
-
-    try:
-        body = json.loads(body_bytes)
-    except Exception:
-        raise HTTPException(400, "JSON xato")
-
-    event = parse_webhook(body)
-    payment_id = event["payment_id"]
-    state      = event["state"]
-
-    pending = await database.fetch_one(
-        "SELECT * FROM pending_payments WHERE paytech_payment_id=:pid",
-        {"pid": payment_id}
-    )
-    if not pending:
-        return {"received": True}   # Bizning to'lov emas — OK qaytarish
-
-    if pending["status"] == "completed":
-        return {"received": True}   # Allaqachon qayta ishlangan
-
-    if state == "COMPLETED":
-        background_tasks.add_task(
-            _credit_user,
-            str(pending["user_id"]),
-            float(pending["amount"]),
-            pending["reference"],
-            payment_id,
-        )
-    elif state in ("DECLINED", "CANCELLED"):
+    async with database.transaction():
         await database.execute(
-            "UPDATE pending_payments SET status='failed', updated_at=NOW() WHERE paytech_payment_id=:pid",
-            {"pid": payment_id}
+            "UPDATE wallets SET balance=balance+:a, updated_at=NOW() WHERE user_id=:uid",
+            {"a": amount_uzs, "uid": str(tx["user_id"])}
         )
-        await audit.log(
-            action="topup_failed",
-            user_id=str(pending["user_id"]),
-            details={"amount": float(pending["amount"]), "reason": event.get("error"), "state": state},
+        await database.execute(
+            """INSERT INTO transactions
+               (receiver_id, amount, type, status, description, reference)
+               VALUES (:uid, :a, 'topup', 'completed', 'Payme orqali to''ldirish', :ref)""",
+            {"uid": str(tx["user_id"]), "a": amount_uzs, "ref": payme_tx_id}
         )
-
-    return {"received": True}
-
-
-@router.get("/return")
-async def payment_return(ref: str):
-    """
-    Foydalanuvchi to'lov sahifasidan qaytgach shu URL ochiladi.
-    Deep link orqali ilovaga yo'naltirish.
-    """
-    return RedirectResponse(url=f"{FRONTEND_DEEP_LINK}?ref={ref}")
-
-
-async def _credit_user(user_id: str, amount: float, reference: str, payment_id: str):
-    """To'lov muvaffaqiyatli — balansga qo'shish"""
-    try:
-        async with database.transaction():
-            # Balansga qo'shish
-            await database.execute(
-                "UPDATE wallets SET balance=balance+:a, updated_at=NOW() WHERE user_id=:uid",
-                {"a": amount, "uid": user_id}
-            )
-            # Tranzaksiya yozish
-            tx = await database.fetch_one(
-                """INSERT INTO transactions
-                   (receiver_id, amount, type, status, description, reference)
-                   VALUES (:uid, :a, 'topup', 'completed', :desc, :ref)
-                   RETURNING id""",
-                {
-                    "uid":  user_id,
-                    "a":    amount,
-                    "desc": "Karta orqali to'ldirish (PayTech)",
-                    "ref":  reference,
-                }
-            )
-            # Pending to'lovni yakunlangan deb belgilash
-            await database.execute(
-                "UPDATE pending_payments SET status='completed', updated_at=NOW() WHERE paytech_payment_id=:pid",
-                {"pid": payment_id}
-            )
-
-        await audit.log(
-            action="topup_completed",
-            user_id=user_id,
-            entity_type="transaction",
-            entity_id=str(tx["id"]),
-            details={"amount": amount, "ref": reference, "payment_id": payment_id},
+        await database.execute(
+            "UPDATE payme_transactions SET state=2, perform_time=:pt WHERE payme_id=:pid",
+            {"pt": perform_time, "pid": payme_tx_id}
         )
 
-        # Push notification
-        tokens = await get_user_tokens(database, user_id)
-        if tokens:
-            amt_fmt = f"{amount:,.0f}".replace(",", " ")
-            await send_push(
-                tokens,
-                title="Hisob to'ldirildi",
-                body=f"{amt_fmt} UZS kartangizdan hisob raqamingizga o'tkazildi",
-                data={"type": "topup", "reference": reference}
-            )
+    return ok(req_id, {
+        "transaction": str(tx["id"]),
+        "perform_time": perform_time,
+        "state": 2
+    })
 
-    except Exception as e:
-        print(f"[PayTech] Credit error: {e}")
+
+async def check_transaction(req_id, params):
+    payme_tx_id = params.get("id")
+
+    tx = await database.fetch_one(
+        "SELECT * FROM payme_transactions WHERE payme_id=:pid",
+        {"pid": payme_tx_id}
+    )
+    if not tx:
+        return err(req_id, ERR_TX_NOT_FOUND, "Tranzaksiya topilmadi")
+
+    return ok(req_id, {
+        "create_time":  tx["create_time"],
+        "perform_time": tx["perform_time"] or 0,
+        "cancel_time":  tx["cancel_time"] or 0,
+        "transaction":  str(tx["id"]),
+        "state":        tx["state"],
+        "reason":       tx["reason"]
+    })
+
+
+async def cancel_transaction(req_id, params):
+    payme_tx_id = params.get("id")
+    reason = params.get("reason", 1)
+
+    tx = await database.fetch_one(
+        "SELECT * FROM payme_transactions WHERE payme_id=:pid",
+        {"pid": payme_tx_id}
+    )
+    if not tx:
+        return err(req_id, ERR_TX_NOT_FOUND, "Tranzaksiya topilmadi")
+
+    if tx["state"] == -1:
+        return ok(req_id, {
+            "transaction": str(tx["id"]),
+            "cancel_time": tx["cancel_time"],
+            "state": -1
+        })
+
+    if tx["state"] == 2:
+        return err(req_id, ERR_ALREADY_DONE, "To'lov allaqachon amalga oshirilgan")
+
+    cancel_time = int(time.time() * 1000)
+    await database.execute(
+        "UPDATE payme_transactions SET state=-1, cancel_time=:ct, reason=:r WHERE payme_id=:pid",
+        {"ct": cancel_time, "r": reason, "pid": payme_tx_id}
+    )
+
+    return ok(req_id, {
+        "transaction": str(tx["id"]),
+        "cancel_time": cancel_time,
+        "state": -1
+    })
