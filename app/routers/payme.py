@@ -264,7 +264,7 @@ async def cancel_transaction(req_id, params):
 async def get_statement(req_id, params):
     from_time = params.get("from", 0)
     to_time = params.get("to", int(time.
-[26.04.2026 13:11] Farhod: time() * 1000))
+    time() * 1000))
 
     rows = await database.fetch_all(
         "SELECT * FROM payme_transactions WHERE create_time>=:f AND create_time<=:t ORDER BY create_time ASC",
