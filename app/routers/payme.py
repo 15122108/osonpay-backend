@@ -60,21 +60,16 @@ async def get_user_by_order(order_id):
     if user:
         return user
 
-    # Keyin UUID formatini tekshirib, id orqali qidirish
+    # UUID formatini tekshirib, id orqali qidirish
     try:
-        uuid.UUID(order_str)  # UUID formatmi yoki yo'qligini tekshiradi
+        uuid.UUID(order_str)  # UUID formatmi tekshirish
         user = await database.fetch_one(
             "SELECT id FROM users WHERE id=:oid::uuid",
             {"oid": order_str}
         )
+        return user
     except ValueError:
-        # UUID format emas — raqamli id bo'lishi mumkin
-        user = await database.fetch_one(
-            "SELECT id FROM users WHERE id::text=:oid",
-            {"oid": order_str}
-        )
-
-    return user
+        return None
 
 
 @router.post("/payme")
