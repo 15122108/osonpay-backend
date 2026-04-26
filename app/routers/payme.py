@@ -1,5 +1,6 @@
 import base64
 import time
+import uuid
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from app.database import database
@@ -50,16 +51,29 @@ def err(request_id, code, message):
 
 async def get_user_by_order(order_id):
     order_str = str(order_id)
+
+    # Avval phone orqali qidirish
     user = await database.fetch_one(
         "SELECT id FROM users WHERE phone=:oid",
         {"oid": order_str}
     )
     if user:
         return user
-    user = await database.fetch_one(
-        "SELECT id FROM users WHERE id::varchar=:oid",
-        {"oid": order_str}
-    )
+
+    # Keyin UUID formatini tekshirib, id orqali qidirish
+    try:
+        uuid.UUID(order_str)  # UUID formatmi yoki yo'qligini tekshiradi
+        user = await database.fetch_one(
+            "SELECT id FROM users WHERE id=:oid::uuid",
+            {"oid": order_str}
+        )
+    except ValueError:
+        # UUID format emas — raqamli id bo'lishi mumkin
+        user = await database.fetch_one(
+            "SELECT id FROM users WHERE id::text=:oid",
+            {"oid": order_str}
+        )
+
     return user
 
 
