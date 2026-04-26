@@ -54,19 +54,22 @@ def err(request_id, code, message):
 
 async def get_user_by_order(order_id):
     order_str = str(order_id)
-
     user = await database.fetch_one(
         "SELECT id FROM users WHERE phone=:oid",
         {"oid": order_str}
     )
     if user:
         return user
-
-    user = await database.fetch_one(
-        "SELECT id FROM users WHERE id::text=:oid",
-        {"oid": order_str}
-    )
-    return user
+    try:
+        user = await database.fetch_one(
+            "SELECT id FROM users WHERE CAST(id AS TEXT)=:oid",
+            {"oid": order_str}
+        )
+        if user:
+            return user
+    except Exception:
+        pass
+    return None
 
 
 @router.options("/payme")
@@ -116,10 +119,14 @@ async def payme_webhook(request: Request):
 
 async def check_perform(req_id, params):
     amount = params.get("amount", 0)
-    order_id = params.get("account", {}).get("order_id")
+    account = params.get("account", {})
+    order_id = account.get("order_id")
 
-    if amount <= 0:
+    if not isinstance(amount, (int, float)) or amount <= 0:
         return err(req_id, ERR_INVALID_AMOUNT, "Summa xato")
+
+    if not order_id:
+        return err(req_id, ERR_INVALID_ACCOUNT, "order_id yoq")
 
     user = await get_user_by_order(order_id)
     if not user:
@@ -131,8 +138,15 @@ async def check_perform(req_id, params):
 async def create_transaction(req_id, params):
     payme_tx_id = params.get("id")
     amount = params.get("amount", 0)
-    order_id = params.get("account", {}).get("order_id")
+    account = params.get("account", {})
+    order_id = account.get("order_id")
     create_time = params.get("time", int(time.time() * 1000))
+
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        return err(req_id, ERR_INVALID_AMOUNT, "Summa xato")
+
+    if not order_id:
+        return err(req_id, ERR_INVALID_ACCOUNT, "order_id yoq")
 
     user = await get_user_by_order(order_id)
     if not user:
@@ -143,25 +157,20 @@ async def create_transaction(req_id, params):
         {"pid": payme_tx_id}
     )
     if existing:
+        if existing["state"] != 1:
+            return err(req_id, ERR_CANT_PERFORM, "Tranzaksiya holati xato")
         return ok(req_id, {
             "create_time": existing["create_time"],
             "transaction": str(existing["id"]),
-            "state": existing["state"]
+            "state": 1
         })
 
+    # UUID ni to'g'ri formatda yuborish
+    user_id = user["id"]
+
     tx = await database.fetch_one(
-        """
-        INSERT INTO payme_transactions
-        (payme_id, user_id, amount, state, create_time)
-        VALUES (:pid, :uid, :amt, 1, :ct)
-        RETURNING *
-        """,
-        {
-            "pid": payme_tx_id,
-            "uid": user["id"],
-            "amt": amount,
-            "ct": create_time
-        }
+        "INSERT INTO payme_transactions (payme_id, user_id, amount, state, create_time) VALUES (:pid, :uid::uuid, :amt, 1, :ct) RETURNING *",
+        {"pid": payme_tx_id, "uid": str(user_id), "amt": amount, "ct": create_time}
     )
 
     return ok(req_id, {
@@ -188,34 +197,24 @@ async def perform_transaction(req_id, params):
             "state": 2
         })
 
+    if tx["state"] != 1:
+        return err(req_id, ERR_CANT_PERFORM, "Tranzaksiya holati xato")
+
     perform_time = int(time.time() * 1000)
     amount_uzs = tx["amount"] / 100
+    user_id_str = str(tx["user_id"])
 
     async with database.transaction():
         await database.execute(
-            """
-            UPDATE wallets
-            SET balance = balance + :a
-            WHERE user_id = :uid
-            """,
-            {"a": amount_uzs, "uid": tx["user_id"]}
+            "UPDATE wallets SET balance=balance+:a, updated_at=NOW() WHERE user_id=:uid::uuid",
+            {"a": amount_uzs, "uid": user_id_str}
         )
-
         await database.execute(
-            """
-            INSERT INTO transactions
-            (receiver_id, amount, type, status, description, reference)
-            VALUES (:uid, :a, 'topup', 'completed', 'Payme', :ref)
-            """,
-            {"uid": tx["user_id"], "a": amount_uzs, "ref": payme_tx_id}
+            "INSERT INTO transactions (receiver_id, amount, type, status, description, reference) VALUES (:uid::uuid, :a, 'topup', 'completed', 'Payme orqali toldirish', :ref)",
+            {"uid": user_id_str, "a": amount_uzs, "ref": payme_tx_id}
         )
-
         await database.execute(
-            """
-            UPDATE payme_transactions
-            SET state=2, perform_time=:pt
-            WHERE payme_id=:pid
-            """,
+            "UPDATE payme_transactions SET state=2, perform_time=:pt WHERE payme_id=:pid",
             {"pt": perform_time, "pid": payme_tx_id}
         )
 
@@ -227,23 +226,6 @@ async def perform_transaction(req_id, params):
 
 
 async def check_transaction(req_id, params):
-    tx = await database.fetch_one(
-        "SELECT * FROM payme_transactions WHERE payme_id=:pid",
-        {"pid": params.get("id")}
-    )
-    if not tx:
-        return err(req_id, ERR_TX_NOT_FOUND, "Topilmadi")
-
-    return ok(req_id, {
-        "create_time": tx["create_time"],
-        "perform_time": tx["perform_time"] or 0,
-        "cancel_time": tx["cancel_time"] or 0,
-        "transaction": str(tx["id"]),
-        "state": tx["state"]
-    })
-
-
-async def cancel_transaction(req_id, params):
     payme_tx_id = params.get("id")
 
     tx = await database.fetch_one(
@@ -251,17 +233,43 @@ async def cancel_transaction(req_id, params):
         {"pid": payme_tx_id}
     )
     if not tx:
-        return err(req_id, ERR_TX_NOT_FOUND, "Topilmadi")
+        return err(req_id, ERR_TX_NOT_FOUND, "Tranzaksiya topilmadi")
+
+    return ok(req_id, {
+        "create_time":  tx["create_time"],
+        "perform_time": tx["perform_time"] or 0,
+        "cancel_time":  tx["cancel_time"] or 0,
+        "transaction":  str(tx["id"]),
+        "state":        tx["state"],
+        "reason":       tx["reason"]
+    })
+
+
+async def cancel_transaction(req_id, params):
+    payme_tx_id = params.get("id")
+    reason = params.get("reason", 1)
+
+    tx = await database.fetch_one(
+        "SELECT * FROM payme_transactions WHERE payme_id=:pid",
+        {"pid": payme_tx_id}
+    )
+    if not tx:
+        return err(req_id, ERR_TX_NOT_FOUND, "Tranzaksiya topilmadi")
+
+    if tx["state"] == -1:
+        return ok(req_id, {
+            "transaction": str(tx["id"]),
+            "cancel_time": tx["cancel_time"],
+            "state": -1
+        })
+
+    if tx["state"] == 2:
+        return err(req_id, ERR_ALREADY_DONE, "Tolov allaqachon amalga oshirilgan")
 
     cancel_time = int(time.time() * 1000)
-
     await database.execute(
-        """
-        UPDATE payme_transactions
-        SET state=-1, cancel_time=:ct
-        WHERE payme_id=:pid
-        """,
-        {"ct": cancel_time, "pid": payme_tx_id}
+        "UPDATE payme_transactions SET state=-1, cancel_time=:ct, reason=:r WHERE payme_id=:pid",
+         {"ct": cancel_time, "r": reason, "pid": payme_tx_id}
     )
 
     return ok(req_id, {
@@ -272,20 +280,27 @@ async def cancel_transaction(req_id, params):
 
 
 async def get_statement(req_id, params):
+    from_time = params.get("from", 0)
+    to_time = params.get("to", int(time.time() * 1000))
+
     rows = await database.fetch_all(
-        "SELECT * FROM payme_transactions"
+        "SELECT * FROM payme_transactions WHERE create_time>=:f AND create_time<=:t ORDER BY create_time ASC",
+        {"f": from_time, "t": to_time}
     )
 
-    return ok(req_id, {
-        "transactions": [
-            {
-                "id": tx["payme_id"],
-                "time": tx["create_time"],
-                "amount": tx["amount"],
-                "account": {"order_id": str(tx["user_id"])},
-                "transaction": str(tx["id"]),
-                "state": tx["state"]
-            }
-            for tx in rows
-        ]
-    })
+    transactions = []
+    for tx in rows:
+        transactions.append({
+            "id": tx["payme_id"],
+            "time": tx["create_time"],
+            "amount": tx["amount"],
+            "account": {"order_id": str(tx["user_id"])},
+            "create_time": tx["create_time"],
+            "perform_time": tx["perform_time"] or 0,
+            "cancel_time": tx["cancel_time"] or 0,
+            "transaction": str(tx["id"]),
+            "state": tx["state"],
+            "reason": tx["reason"]
+        })
+
+    return ok(req_id, {"transactions": transactions})
