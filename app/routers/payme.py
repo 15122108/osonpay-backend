@@ -1,7 +1,7 @@
 import base64
 import time
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
 from app.database import database
 import os
 
@@ -30,11 +30,7 @@ def check_auth(request: Request):
 
 
 def json_response(data: dict) -> JSONResponse:
-    response = JSONResponse(data)
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-    return response
+    return JSONResponse(data)
 
 
 def ok(request_id, result):
@@ -65,18 +61,6 @@ async def get_user_by_order(order_id):
         {"oid": order_str}
     )
     return user
-
-
-@router.options("/payme")
-async def payme_options():
-    return Response(
-        status_code=200,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-        }
-    )
 
 
 @router.post("/payme")
@@ -160,7 +144,6 @@ async def create_transaction(req_id, params):
             "state": 1
         })
 
-    # UUID ni to'g'ri formatda yuborish
     user_id = user["id"]
 
     tx = await database.fetch_one(
@@ -264,7 +247,7 @@ async def cancel_transaction(req_id, params):
     cancel_time = int(time.time() * 1000)
     await database.execute(
         "UPDATE payme_transactions SET state=-1, cancel_time=:ct, reason=:r WHERE payme_id=:pid",
-         {"ct": cancel_time, "r": reason, "pid": payme_tx_id}
+        {"ct": cancel_time, "r": reason, "pid": payme_tx_id}
     )
 
     return ok(req_id, {
