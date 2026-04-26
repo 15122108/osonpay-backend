@@ -1,6 +1,7 @@
 import base64
 import time
 from fastapi import APIRouter, Request
+from fastapi.responses import Response
 from app.database import database
 import os
 
@@ -8,11 +9,11 @@ router = APIRouter()
 
 PAYME_KEY = os.getenv("PAYME_KEY")
 
-ERR_INVALID_AMOUNT  = -31001
-ERR_INVALID_ACCOUNT = -31050
-ERR_TX_NOT_FOUND    = -31003
-ERR_CANT_PERFORM    = -31008
-ERR_ALREADY_DONE    = -31060
+ERR_INVALID_AMOUNT   = -31001
+ERR_INVALID_ACCOUNT  = -31050
+ERR_TX_NOT_FOUND     = -31003
+ERR_CANT_PERFORM     = -31008
+ERR_ALREADY_DONE     = -31060
 ERR_METHOD_NOT_FOUND = -32601
 
 
@@ -41,6 +42,17 @@ def err(request_id, code, message):
             "message": {"uz": message, "ru": message, "en": message}
         }
     }
+
+
+@router.options("/payme")
+async def payme_options():
+    return Response(
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
 
 @router.post("/payme")
@@ -73,11 +85,11 @@ async def check_perform(req_id, params):
     account = params.get("account", {})
     order_id = account.get("order_id")
 
-    if not (100_000 <= amount <= 5_000_000_000):
+    if not (100000 <= amount <= 5000000000):
         return err(req_id, ERR_INVALID_AMOUNT, "Summa xato")
 
     if not order_id:
-        return err(req_id, ERR_INVALID_ACCOUNT, "order_id yo'q")
+        return err(req_id, ERR_INVALID_ACCOUNT, "order_id yoq")
 
     user = await database.fetch_one(
         "SELECT id FROM users WHERE id::text=:oid OR phone=:oid",
@@ -96,7 +108,7 @@ async def create_transaction(req_id, params):
     order_id = account.get("order_id")
     create_time = params.get("time", int(time.time() * 1000))
 
-    if not (100_000 <= amount <= 5_000_000_000):
+    if not (100000 <= amount <= 5000000000):
         return err(req_id, ERR_INVALID_AMOUNT, "Summa xato")
 
     user = await database.fetch_one(
@@ -120,12 +132,8 @@ async def create_transaction(req_id, params):
         })
 
     tx = await database.fetch_one(
-        """INSERT INTO payme_transactions
-           (payme_id, user_id, amount, state, create_time)
-           VALUES (:pid, :uid, :amt, 1, :ct)
-           RETURNING *""",
-        {"pid": payme_tx_id, "uid": str(user["id"]),
-         "amt": amount, "ct": create_time}
+        "INSERT INTO payme_transactions (payme_id, user_id, amount, state, create_time) VALUES (:pid, :uid, :amt, 1, :ct) RETURNING *",
+        {"pid": payme_tx_id, "uid": str(user["id"]), "amt": amount, "ct": create_time}
     )
 
     return ok(req_id, {
@@ -139,7 +147,7 @@ async def perform_transaction(req_id, params):
     payme_tx_id = params.get("id")
 
     tx = await database.fetch_one(
- "SELECT * FROM payme_transactions WHERE payme_id=:pid",
+        "SELECT * FROM payme_transactions WHERE payme_id=:pid",
         {"pid": payme_tx_id}
     )
     if not tx:
@@ -164,9 +172,7 @@ async def perform_transaction(req_id, params):
             {"a": amount_uzs, "uid": str(tx["user_id"])}
         )
         await database.execute(
-            """INSERT INTO transactions
-               (receiver_id, amount, type, status, description, reference)
-               VALUES (:uid, :a, 'topup', 'completed', 'Payme orqali to''ldirish', :ref)""",
+            "INSERT INTO transactions (receiver_id, amount, type, status, description, reference) VALUES (:uid, :a, 'topup', 'completed', 'Payme orqali toldirish', :ref)",
             {"uid": str(tx["user_id"]), "a": amount_uzs, "ref": payme_tx_id}
         )
         await database.execute(
@@ -220,7 +226,7 @@ async def cancel_transaction(req_id, params):
         })
 
     if tx["state"] == 2:
-        return err(req_id, ERR_ALREADY_DONE, "To'lov allaqachon amalga oshirilgan")
+        return err(req_id, ERR_ALREADY_DONE, "Tolov allaqachon amalga oshirilgan")
 
     cancel_time = int(time.time() * 1000)
     await database.execute(
