@@ -1,7 +1,7 @@
 import base64
 import time
 from fastapi import APIRouter, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from app.database import database
 import os
 
@@ -29,6 +29,14 @@ def check_auth(request: Request):
         return False
 
 
+def json_response(data: dict) -> JSONResponse:
+    response = JSONResponse(data)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    return response
+
+
 def ok(request_id, result):
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
@@ -47,6 +55,7 @@ def err(request_id, code, message):
 @router.options("/payme")
 async def payme_options():
     return Response(
+        status_code=200,
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -57,27 +66,35 @@ async def payme_options():
 
 @router.post("/payme")
 async def payme_webhook(request: Request):
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response(err(None, -32700, "JSON xato"))
+
     req_id = body.get("id")
 
     if not check_auth(request):
-        return err(req_id, -32504, "Autentifikatsiya xatosi")
+        return json_response(err(req_id, -32504, "Autentifikatsiya xatosi"))
 
     method = body.get("method")
     params = body.get("params", {})
 
     if method == "CheckPerformTransaction":
-        return await check_perform(req_id, params)
+        result = await check_perform(req_id, params)
     elif method == "CreateTransaction":
-        return await create_transaction(req_id, params)
+        result = await create_transaction(req_id, params)
     elif method == "PerformTransaction":
-        return await perform_transaction(req_id, params)
+        result = await perform_transaction(req_id, params)
     elif method == "CheckTransaction":
-        return await check_transaction(req_id, params)
+        result = await check_transaction(req_id, params)
     elif method == "CancelTransaction":
-        return await cancel_transaction(req_id, params)
+        result = await cancel_transaction(req_id, params)
+    elif method == "GetStatement":
+        result = await get_statement(req_id, params)
     else:
-        return err(req_id, ERR_METHOD_NOT_FOUND, "Method topilmadi")
+        result = err(req_id, ERR_METHOD_NOT_FOUND, "Method topilmadi")
+
+    return json_response(result)
 
 
 async def check_perform(req_id, params):
@@ -85,7 +102,7 @@ async def check_perform(req_id, params):
     account = params.get("account", {})
     order_id = account.get("order_id")
 
-    if not (100000 <= amount <= 5000000000):
+    if not isinstance(amount, (int, float)) or amount <= 0:
         return err(req_id, ERR_INVALID_AMOUNT, "Summa xato")
 
     if not order_id:
@@ -108,8 +125,11 @@ async def create_transaction(req_id, params):
     order_id = account.get("order_id")
     create_time = params.get("time", int(time.time() * 1000))
 
-    if not (100000 <= amount <= 5000000000):
+    if not isinstance(amount, (int, float)) or amount <= 0:
         return err(req_id, ERR_INVALID_AMOUNT, "Summa xato")
+
+    if not order_id:
+        return err(req_id, ERR_INVALID_ACCOUNT, "order_id yoq")
 
     user = await database.fetch_one(
         "SELECT id FROM users WHERE id::text=:oid OR phone=:oid",
@@ -239,3 +259,31 @@ async def cancel_transaction(req_id, params):
         "cancel_time": cancel_time,
         "state": -1
     })
+
+
+async def get_statement(req_id, params):
+    from_time = params.get("from", 0)
+    to_time = params.get("to", int(time.
+[26.04.2026 13:11] Farhod: time() * 1000))
+
+    rows = await database.fetch_all(
+        "SELECT * FROM payme_transactions WHERE create_time>=:f AND create_time<=:t ORDER BY create_time ASC",
+        {"f": from_time, "t": to_time}
+    )
+
+    transactions = []
+    for tx in rows:
+        transactions.append({
+            "id": tx["payme_id"],
+            "time": tx["create_time"],
+            "amount": tx["amount"],
+            "account": {"order_id": tx["user_id"]},
+            "create_time": tx["create_time"],
+            "perform_time": tx["perform_time"] or 0,
+            "cancel_time": tx["cancel_time"] or 0,
+            "transaction": str(tx["id"]),
+            "state": tx["state"],
+            "reason": tx["reason"]
+        })
+
+    return ok(req_id, {"transactions": transactions})
