@@ -170,7 +170,7 @@ async def run_migrations():
         CREATE TABLE IF NOT EXISTS payme_transactions (
             id SERIAL PRIMARY KEY,
             payme_id VARCHAR(255) UNIQUE NOT NULL,
-            user_id VARCHAR(255) NOT NULL,
+            user_id UUID NOT NULL REFERENCES users(id),
             amount BIGINT NOT NULL,
             state INTEGER DEFAULT 1,
             create_time BIGINT,
