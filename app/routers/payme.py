@@ -60,16 +60,11 @@ async def get_user_by_order(order_id):
     )
     if user:
         return user
-    try:
-        user = await database.fetch_one(
-            "SELECT id FROM users WHERE CAST(id AS TEXT)=:oid",
-            {"oid": order_str}
-        )
-        if user:
-            return user
-    except Exception:
-        pass
-    return None
+    user = await database.fetch_one(
+        "SELECT id FROM users WHERE id::varchar=:oid",
+        {"oid": order_str}
+    )
+    return user
 
 
 @router.options("/payme")
