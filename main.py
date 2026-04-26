@@ -35,10 +35,11 @@ async def security_headers(request: Request, call_next):
     start = time.time()
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["X-Request-Time"] = str(round(time.time() - start, 4))
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
 @app.exception_handler(Exception)
