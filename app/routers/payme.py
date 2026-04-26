@@ -52,6 +52,28 @@ def err(request_id, code, message):
     }
 
 
+async def get_user_by_order(order_id):
+    order_str = str(order_id)
+    # Avval phone bilan qidirish
+    user = await database.fetch_one(
+        "SELECT id FROM users WHERE phone=:oid",
+        {"oid": order_str}
+    )
+    if user:
+        return user
+    # Keyin UUID bilan qidirish
+    try:
+        user = await database.fetch_one(
+            "SELECT id FROM users WHERE CAST(id AS TEXT)=:oid",
+            {"oid": order_str}
+        )
+        if user:
+            return user
+    except Exception:
+        pass
+    return None
+
+
 @router.options("/payme")
 async def payme_options():
     return Response(
@@ -108,10 +130,7 @@ async def check_perform(req_id, params):
     if not order_id:
         return err(req_id, ERR_INVALID_ACCOUNT, "order_id yoq")
 
-    user = await database.fetch_one(
-        "SELECT id FROM users WHERE id::text=:oid OR phone=:oid",
-        {"oid": str(order_id)}
-    )
+    user = await get_user_by_order(order_id)
     if not user:
         return err(req_id, ERR_INVALID_ACCOUNT, "Foydalanuvchi topilmadi")
 
@@ -123,7 +142,8 @@ async def create_transaction(req_id, params):
     amount = params.get("amount", 0)
     account = params.get("account", {})
     order_id = account.get("order_id")
-    create_time = params.get("time", int(time.time() * 1000))
+    create_time = params.get("time", int(time.
+    time() * 1000))
 
     if not isinstance(amount, (int, float)) or amount <= 0:
         return err(req_id, ERR_INVALID_AMOUNT, "Summa xato")
@@ -131,10 +151,7 @@ async def create_transaction(req_id, params):
     if not order_id:
         return err(req_id, ERR_INVALID_ACCOUNT, "order_id yoq")
 
-    user = await database.fetch_one(
-        "SELECT id FROM users WHERE id::text=:oid OR phone=:oid",
-        {"oid": str(order_id)}
-    )
+    user = await get_user_by_order(order_id)
     if not user:
         return err(req_id, ERR_INVALID_ACCOUNT, "Foydalanuvchi topilmadi")
 
@@ -153,7 +170,7 @@ async def create_transaction(req_id, params):
 
     tx = await database.fetch_one(
         "INSERT INTO payme_transactions (payme_id, user_id, amount, state, create_time) VALUES (:pid, :uid, :amt, 1, :ct) RETURNING *",
-        {"pid": payme_tx_id, "uid": str(user["id"]), "amt": amount, "ct": create_time}
+        {"pid": payme_tx_id, "uid": user["id"], "amt": amount, "ct": create_time}
     )
 
     return ok(req_id, {
@@ -189,11 +206,11 @@ async def perform_transaction(req_id, params):
     async with database.transaction():
         await database.execute(
             "UPDATE wallets SET balance=balance+:a, updated_at=NOW() WHERE user_id=:uid",
-            {"a": amount_uzs, "uid": str(tx["user_id"])}
+            {"a": amount_uzs, "uid": tx["user_id"]}
         )
         await database.execute(
             "INSERT INTO transactions (receiver_id, amount, type, status, description, reference) VALUES (:uid, :a, 'topup', 'completed', 'Payme orqali toldirish', :ref)",
-            {"uid": str(tx["user_id"]), "a": amount_uzs, "ref": payme_tx_id}
+            {"uid": tx["user_id"], "a": amount_uzs, "ref": payme_tx_id}
         )
         await database.execute(
             "UPDATE payme_transactions SET state=2, perform_time=:pt WHERE payme_id=:pid",
@@ -251,7 +268,7 @@ async def cancel_transaction(req_id, params):
     cancel_time = int(time.time() * 1000)
     await database.execute(
         "UPDATE payme_transactions SET state=-1, cancel_time=:ct, reason=:r WHERE payme_id=:pid",
-        {"ct": cancel_time, "r": reason, "pid": payme_tx_id}
+    {"ct": cancel_time, "r": reason, "pid": payme_tx_id}
     )
 
     return ok(req_id, {
@@ -263,8 +280,7 @@ async def cancel_transaction(req_id, params):
 
 async def get_statement(req_id, params):
     from_time = params.get("from", 0)
-    to_time = params.get("to", int(time.
-    time() * 1000))
+    to_time = params.get("to", int(time.time() * 1000))
 
     rows = await database.fetch_all(
         "SELECT * FROM payme_transactions WHERE create_time>=:f AND create_time<=:t ORDER BY create_time ASC",
@@ -277,7 +293,7 @@ async def get_statement(req_id, params):
             "id": tx["payme_id"],
             "time": tx["create_time"],
             "amount": tx["amount"],
-            "account": {"order_id": tx["user_id"]},
+            "account": {"order_id": str(tx["user_id"])},
             "create_time": tx["create_time"],
             "perform_time": tx["perform_time"] or 0,
             "cancel_time": tx["cancel_time"] or 0,
