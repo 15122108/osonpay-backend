@@ -22,7 +22,6 @@ app = FastAPI(
     redoc_url=None
 )
 
-# ✅ FAQAT bitta CORS middleware — bu yetarli
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,13 +30,14 @@ app.add_middleware(
     allow_credentials=False,
 )
 
-# ✅ Security headers — CORS sarlavhalari BU YERDA YO'Q
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     start = time.time()
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["X-Request-Time"] = str(round(time.time() - start, 4))
     return response
 

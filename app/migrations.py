@@ -166,22 +166,23 @@ async def run_migrations():
         )
     """)
 
+    # ✅ YANGI — payme_transactions jadvali
     await database.execute("""
         CREATE TABLE IF NOT EXISTS payme_transactions (
-            id SERIAL PRIMARY KEY,
-            payme_id VARCHAR(255) UNIQUE NOT NULL,
-            user_id UUID NOT NULL REFERENCES users(id),
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            payme_id VARCHAR(100) UNIQUE NOT NULL,
+            user_id UUID REFERENCES users(id),
             amount BIGINT NOT NULL,
-            state INTEGER DEFAULT 1,
+            state INT DEFAULT 1,
             create_time BIGINT,
             perform_time BIGINT,
             cancel_time BIGINT,
-            reason INTEGER,
+            reason INT,
             created_at TIMESTAMP DEFAULT NOW()
         )
     """)
 
-    await database.execute("CREATE INDEX IF NOT EXISTS idx_pending_pid ON pending_payments(paytech_payment_id)")
+    # Indekslar
     await database.execute("CREATE INDEX IF NOT EXISTS idx_otps_phone ON otps(phone)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_tx_sender ON transactions(sender_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_tx_receiver ON transactions(receiver_id)")
@@ -189,6 +190,7 @@ async def run_migrations():
     await database.execute("CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_fcm_user ON fcm_tokens(user_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_fraud_sender ON fraud_logs(sender_id)")
+    await database.execute("CREATE INDEX IF NOT EXISTS idx_pending_pid ON pending_payments(paytech_payment_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_payme_tx ON payme_transactions(payme_id)")
 
     print("Migrations done!")

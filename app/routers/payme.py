@@ -62,7 +62,7 @@ async def get_user_by_order(order_id):
 
     # UUID formatini tekshirib, id orqali qidirish
     try:
-        uuid.UUID(order_str)  # UUID formatmi tekshirish
+        uuid.UUID(order_str)
         user = await database.fetch_one(
             "SELECT id FROM users WHERE id=:oid::uuid",
             {"oid": order_str}
@@ -110,7 +110,7 @@ async def check_perform(req_id, params):
     account = params.get("account", {})
     order_id = account.get("order_id")
 
-    if not isinstance(amount, (int, float)) or amount <= 0:
+    if not isinstance(amount, (int, float)) or not (100000 <= amount <= 5000000000):
         return err(req_id, ERR_INVALID_AMOUNT, "Summa xato")
 
     if not order_id:
@@ -130,7 +130,7 @@ async def create_transaction(req_id, params):
     order_id = account.get("order_id")
     create_time = params.get("time", int(time.time() * 1000))
 
-    if not isinstance(amount, (int, float)) or amount <= 0:
+    if not isinstance(amount, (int, float)) or not (100000 <= amount <= 5000000000):
         return err(req_id, ERR_INVALID_AMOUNT, "Summa xato")
 
     if not order_id:
@@ -153,11 +153,12 @@ async def create_transaction(req_id, params):
             "state": 1
         })
 
-    user_id = user["id"]
+    user_id = str(user["id"])
 
     tx = await database.fetch_one(
-        "INSERT INTO payme_transactions (payme_id, user_id, amount, state, create_time) VALUES (:pid, :uid::uuid, :amt, 1, :ct) RETURNING *",
-        {"pid": payme_tx_id, "uid": str(user_id), "amt": amount, "ct": create_time}
+        "INSERT INTO payme_transactions (payme_id, user_id, amount, state, create_time) "
+        "VALUES (:pid, :uid::uuid, :amt, 1, :ct) RETURNING *",
+        {"pid": payme_tx_id, "uid": user_id, "amt": amount, "ct": create_time}
     )
 
     return ok(req_id, {
@@ -197,7 +198,8 @@ async def perform_transaction(req_id, params):
             {"a": amount_uzs, "uid": user_id_str}
         )
         await database.execute(
-            "INSERT INTO transactions (receiver_id, amount, type, status, description, reference) VALUES (:uid::uuid, :a, 'topup', 'completed', 'Payme orqali toldirish', :ref)",
+            "INSERT INTO transactions (receiver_id, amount, type, status, description, reference) "
+            "VALUES (:uid::uuid, :a, 'topup', 'completed', 'Payme orqali toldirish', :ref)",
             {"uid": user_id_str, "a": amount_uzs, "ref": payme_tx_id}
         )
         await database.execute(
