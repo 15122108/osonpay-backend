@@ -12,6 +12,8 @@ import os
 router = APIRouter()
 ENV = os.getenv("NODE_ENV", "development")
 
+TOKEN_EXPIRE_DAYS = 365
+
 
 class OTPReq(BaseModel):
     phone: str
@@ -101,7 +103,7 @@ async def verify_otp(b: VerifyReq, request: Request):
             has_pin = False
 
         token   = make_token(uid, b.phone)
-        expires = datetime.utcnow() + timedelta(days=30)
+        expires = datetime.utcnow() + timedelta(days=TOKEN_EXPIRE_DAYS)
         ua      = request.headers.get("User-Agent", "")[:255]
         await database.execute(
             "INSERT INTO sessions(user_id,token,expires_at,device_info) VALUES(:u,:t,:e,:d)",
@@ -129,7 +131,6 @@ async def set_pin(b: PinReq, request: Request, uid: str = Depends(get_user)):
     return {"success": True}
 
 
-# ← BU YERDA INDENT TO'G'RI — set_pin ichida EMAS
 @router.post("/verify-pin")
 async def verify_pin_route(b: PinVerifyReq, request: Request):
     ip = get_client_ip(request)
@@ -147,7 +148,7 @@ async def verify_pin_route(b: PinVerifyReq, request: Request):
         raise HTTPException(400, "PIN noto'g'ri")
 
     token   = make_token(str(user["id"]), b.phone)
-    expires = datetime.utcnow() + timedelta(days=30)
+    expires = datetime.utcnow() + timedelta(days=TOKEN_EXPIRE_DAYS)
     ua      = request.headers.get("User-Agent", "")[:255]
     await database.execute(
         "INSERT INTO sessions(user_id,token,expires_at,device_info) VALUES(:u,:t,:e,:d)",
