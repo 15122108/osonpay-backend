@@ -117,8 +117,8 @@ async def check_perform(req_id, params):
     account  = params.get("account", {})
     order_id = account.get("order_id")
 
-    if not isinstance(amount, (int, float)) or not (100_000 <= amount <= 5_000_000_000):
-        return err(req_id, ERR_INVALID_AMOUNT, "Summa xato (1,000 — 50,000,000 UZS)")
+    if not isinstance(amount, (int, float)) or not (100_000 <= amount <= 500_000_000):
+        return err(req_id, ERR_INVALID_AMOUNT, "Summa xato (1,000 — 5,000,000 UZS)")
 
     if not order_id:
         return err(req_id, ERR_INVALID_ACCOUNT, "order_id yo'q")
@@ -145,7 +145,7 @@ async def create_transaction(req_id, params):
     order_id    = account.get("order_id")
     create_time = params.get("time", int(time.time() * 1000))
 
-    if not isinstance(amount, (int, float)) or not (100_000 <= amount <= 5_000_000_000):
+    if not isinstance(amount, (int, float)) or not (100_000 <= amount <= 500_000_000):
         return err(req_id, ERR_INVALID_AMOUNT, "Summa xato")
 
     if not order_id:
