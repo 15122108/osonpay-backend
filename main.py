@@ -34,6 +34,9 @@ app.add_middleware(
 async def security_headers(request: Request, call_next):
     start = time.time()
     response = await call_next(request)
+    # OPTIONS preflight — CORS headerlarini buzmaslik uchun o'tkazib yuboramiz
+    if request.method == "OPTIONS":
+        return response
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
