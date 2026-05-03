@@ -31,10 +31,6 @@ def check_auth(request: Request) -> bool:
         return False
 
 
-def json_response(data: dict) -> JSONResponse:
-    return JSONResponse(data)
-
-
 def ok(request_id, result: dict) -> dict:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
@@ -50,22 +46,29 @@ def err(request_id, code: int, message: str) -> dict:
     }
 
 
+def to_uuid(val) -> uuid.UUID:
+    """Har qanday qiymatni UUID ga o'giradi."""
+    if isinstance(val, uuid.UUID):
+        return val
+    return uuid.UUID(str(val))
+
+
 async def get_user_by_order(order_id) -> dict | None:
     order_str = str(order_id).strip()
 
-    # 1) To'g'ridan-to'g'ri telefon orqali (test: "123", real: "+998901234567")
+    # 1) Telefon orqali (test: "123", real: "+998901234567")
     user = await database.fetch_one(
-        "SELECT id FROM users WHERE phone=:oid AND is_active=TRUE",
+        "SELECT id, phone FROM users WHERE phone = :oid AND is_active = TRUE",
         {"oid": order_str}
     )
     if user:
         return user
 
-    # 2) 998 prefiksi bilan normalizatsiya (+998901234567 → 998901234567)
+    # 2) + prefiksi olib tashlab qayta urinish
     normalized = order_str.lstrip("+")
     if normalized != order_str:
         user = await database.fetch_one(
-            "SELECT id FROM users WHERE phone=:oid AND is_active=TRUE",
+            "SELECT id, phone FROM users WHERE phone = :oid AND is_active = TRUE",
             {"oid": normalized}
         )
         if user:
@@ -73,10 +76,10 @@ async def get_user_by_order(order_id) -> dict | None:
 
     # 3) UUID orqali
     try:
-        uuid.UUID(order_str)
+        uid = uuid.UUID(order_str)
         user = await database.fetch_one(
-            "SELECT id FROM users WHERE id=:oid::uuid AND is_active=TRUE",
-            {"oid": order_str}
+            "SELECT id, phone FROM users WHERE id = :oid AND is_active = TRUE",
+            {"oid": uid}
         )
         return user
     except ValueError:
@@ -88,16 +91,16 @@ async def payme_webhook(request: Request):
     try:
         body = await request.json()
     except Exception:
-        return json_response(err(None, -32700, "JSON xato"))
+        return JSONResponse(err(None, -32700, "JSON xato"))
 
     req_id = body.get("id")
 
     if not check_auth(request):
         await audit.log("payme_auth_failed", details={"id": req_id})
-        return json_response(err(req_id, -32504, "Autentifikatsiya xatosi"))
+        return JSONResponse(err(req_id, -32504, "Autentifikatsiya xatosi"))
 
-    method = body.get("method")
-    params = body.get("params", {})
+    method  = body.get("method")
+    params  = body.get("params", {})
 
     handlers = {
         "CheckPerformTransaction": check_perform,
@@ -110,16 +113,18 @@ async def payme_webhook(request: Request):
 
     handler = handlers.get(method)
     if not handler:
-        return json_response(err(req_id, ERR_METHOD_NOT_FOUND, "Method topilmadi"))
+        return JSONResponse(err(req_id, ERR_METHOD_NOT_FOUND, "Method topilmadi"))
 
     try:
         result = await handler(req_id, params)
     except Exception as e:
-        print(f"[Payme] {method} xatosi: {e}")
+        import traceback
+        print(f"[Payme ERROR] {method}: {e}")
+        print(traceback.format_exc())
         await audit.log("payme_error", details={"method": method, "error": str(e)})
-        return json_response(err(req_id, -32400, "Ichki xato"))
+        return JSONResponse(err(req_id, -32400, f"Ichki xato: {str(e)}"))
 
-    return json_response(result)
+    return JSONResponse(result)
 
 
 async def check_perform(req_id, params):
@@ -137,10 +142,9 @@ async def check_perform(req_id, params):
     if not user:
         return err(req_id, ERR_INVALID_ACCOUNT, "Foydalanuvchi topilmadi")
 
-    # Wallet muzlatilganligini tekshirish
     wallet = await database.fetch_one(
-        "SELECT is_frozen FROM wallets WHERE user_id=:uid",
-        {"uid": str(user["id"])}
+        "SELECT is_frozen FROM wallets WHERE user_id = :uid",
+        {"uid": to_uuid(user["id"])}
     )
     if wallet and wallet["is_frozen"]:
         return err(req_id, ERR_CANT_PERFORM, "Foydalanuvchi hisobi muzlatilgan")
@@ -165,9 +169,11 @@ async def create_transaction(req_id, params):
     if not user:
         return err(req_id, ERR_INVALID_ACCOUNT, "Foydalanuvchi topilmadi")
 
-    # Mavjud tranzaksiyani tekshirish
+    user_uuid = to_uuid(user["id"])
+
+    # Mavjud tranzaksiyani tekshirish (idempotentlik)
     existing = await database.fetch_one(
-        "SELECT * FROM payme_transactions WHERE payme_id=:pid",
+        "SELECT * FROM payme_transactions WHERE payme_id = :pid",
         {"pid": payme_tx_id}
     )
     if existing:
@@ -182,19 +188,19 @@ async def create_transaction(req_id, params):
     tx = await database.fetch_one(
         """INSERT INTO payme_transactions
            (payme_id, user_id, amount, state, create_time)
-           VALUES (:pid, :uid::uuid, :amt, 1, :ct)
+           VALUES (:pid, :uid, :amt, 1, :ct)
            RETURNING *""",
-        {"pid": payme_tx_id, "uid": str(user["id"]), "amt": amount, "ct": create_time}
+        {"pid": payme_tx_id, "uid": user_uuid, "amt": int(amount), "ct": int(create_time)}
     )
 
     await audit.log(
         "payme_tx_created",
-        user_id=str(user["id"]),
+        user_id=str(user_uuid),
         details={"payme_id": payme_tx_id, "amount": amount}
     )
 
     return ok(req_id, {
-        "create_time": create_time,
+        "create_time": int(create_time),
         "transaction": str(tx["id"]),
         "state": 1
     })
@@ -204,7 +210,7 @@ async def perform_transaction(req_id, params):
     payme_tx_id = params.get("id")
 
     tx = await database.fetch_one(
-        "SELECT * FROM payme_transactions WHERE payme_id=:pid",
+        "SELECT * FROM payme_transactions WHERE payme_id = :pid",
         {"pid": payme_tx_id}
     )
     if not tx:
@@ -212,7 +218,7 @@ async def perform_transaction(req_id, params):
 
     if tx["state"] == 2:
         return ok(req_id, {
-            "transaction": str(tx["id"]),
+            "transaction":  str(tx["id"]),
             "perform_time": tx["perform_time"],
             "state": 2
         })
@@ -222,22 +228,23 @@ async def perform_transaction(req_id, params):
 
     perform_time = int(time.time() * 1000)
     amount_uzs   = tx["amount"] / 100
-    user_id_str  = str(tx["user_id"])
+    user_uuid    = to_uuid(tx["user_id"])
+    user_id_str  = str(user_uuid)
 
     async with database.transaction():
         await database.execute(
-            "UPDATE wallets SET balance=balance+:a, updated_at=NOW() WHERE user_id=:uid::uuid",
-            {"a": amount_uzs, "uid": user_id_str}
+            "UPDATE wallets SET balance = balance + :a, updated_at = NOW() WHERE user_id = :uid",
+            {"a": amount_uzs, "uid": user_uuid}
         )
         ledger_tx = await database.fetch_one(
             """INSERT INTO transactions
                (receiver_id, amount, type, status, description, reference)
-               VALUES (:uid::uuid, :a, 'topup', 'completed', 'Payme orqali toldirish', :ref)
+               VALUES (:uid, :a, 'topup', 'completed', 'Payme orqali toldirish', :ref)
                RETURNING id""",
-            {"uid": user_id_str, "a": amount_uzs, "ref": payme_tx_id}
+            {"uid": user_uuid, "a": amount_uzs, "ref": payme_tx_id}
         )
         await database.execute(
-            "UPDATE payme_transactions SET state=2, perform_time=:pt WHERE payme_id=:pid",
+            "UPDATE payme_transactions SET state = 2, perform_time = :pt WHERE payme_id = :pid",
             {"pt": perform_time, "pid": payme_tx_id}
         )
 
@@ -249,7 +256,6 @@ async def perform_transaction(req_id, params):
         details={"payme_id": payme_tx_id, "amount_uzs": amount_uzs}
     )
 
-    # Push notification
     try:
         from app.services.fcm import get_user_tokens, send_push
         tokens = await get_user_tokens(database, user_id_str)
@@ -273,9 +279,8 @@ async def perform_transaction(req_id, params):
 
 async def check_transaction(req_id, params):
     payme_tx_id = params.get("id")
-
     tx = await database.fetch_one(
-        "SELECT * FROM payme_transactions WHERE payme_id=:pid",
+        "SELECT * FROM payme_transactions WHERE payme_id = :pid",
         {"pid": payme_tx_id}
     )
     if not tx:
@@ -296,7 +301,7 @@ async def cancel_transaction(req_id, params):
     reason      = params.get("reason", 1)
 
     tx = await database.fetch_one(
-        "SELECT * FROM payme_transactions WHERE payme_id=:pid",
+        "SELECT * FROM payme_transactions WHERE payme_id = :pid",
         {"pid": payme_tx_id}
     )
     if not tx:
@@ -314,13 +319,13 @@ async def cancel_transaction(req_id, params):
 
     cancel_time = int(time.time() * 1000)
     await database.execute(
-        "UPDATE payme_transactions SET state=-1, cancel_time=:ct, reason=:r WHERE payme_id=:pid",
+        "UPDATE payme_transactions SET state = -1, cancel_time = :ct, reason = :r WHERE payme_id = :pid",
         {"ct": cancel_time, "r": reason, "pid": payme_tx_id}
     )
 
     await audit.log(
         "payme_tx_cancelled",
-        user_id=str(tx["user_id"]),
+        user_id=str(to_uuid(tx["user_id"])),
         details={"payme_id": payme_tx_id, "reason": reason}
     )
 
@@ -337,9 +342,9 @@ async def get_statement(req_id, params):
 
     rows = await database.fetch_all(
         """SELECT * FROM payme_transactions
-           WHERE create_time>=:f AND create_time<=:t
+           WHERE create_time >= :f AND create_time <= :t
            ORDER BY create_time ASC""",
-        {"f": from_time, "t": to_time}
+        {"f": int(from_time), "t": int(to_time)}
     )
 
     return ok(req_id, {
