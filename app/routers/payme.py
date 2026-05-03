@@ -179,9 +179,9 @@ async def handle_create(req_id, params):
     if not user:
         return err(req_id, ERR_INVALID_ACCOUNT, "Foydalanuvchi topilmadi")
 
-    # Idempotentlik — mavjud tranzaksiyani tekshirish
+    # Idempotentlik — xuddi shu payme_id mavjudmi?
     existing = await database.fetch_one(
-        "SELECT state, create_time FROM payme_transactions WHERE payme_id = :pid",
+        "SELECT state, create_time, amount FROM payme_transactions WHERE payme_id = :pid",
         {"pid": payme_id}
     )
     if existing:
@@ -192,6 +192,16 @@ async def handle_create(req_id, params):
             "transaction": payme_id,
             "state": 1,
         })
+
+    # Konkurentlik — bu foydalanuvchida boshqa aktiv (state=1) tranzaksiya bormi?
+    active = await database.fetch_one(
+        """SELECT payme_id FROM payme_transactions
+           WHERE user_id = :uid AND state = 1 AND payme_id != :pid""",
+        {"uid": user["id"], "pid": payme_id}
+    )
+    if active:
+        return err(req_id, ERR_INVALID_ACCOUNT,
+                   "Foydalanuvchida faol tranzaksiya mavjud")
 
     await database.execute(
         """INSERT INTO payme_transactions (payme_id, user_id, amount, state, create_time)
