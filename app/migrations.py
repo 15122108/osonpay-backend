@@ -221,13 +221,14 @@ async def run_migrations():
     )
 
     # Test foydalanuvchining eskirgan state=1 tranzaksiyalarini tozalash
-    cancelled = await database.execute(
+    # reason=3: tranzaksiya muddati o'tdi (Payme spetsifikatsiyasi)
+    await database.execute(
         """UPDATE payme_transactions
-           SET state = -1, cancel_time = :ct, reason = 4
+           SET state = -1, cancel_time = :ct, reason = 3
            WHERE user_id = :uid AND state = 1""",
         {"uid": str(existing["id"]), "ct": int(time.time() * 1000)}
     )
-    print(f"[Seed] Test user state=1 tranzaksiyalar tozalandi")
+    print(f"[Seed] Test user state=1 tranzaksiyalar tozalandi (reason=3)")
 
     print("Migrations done!")
 
