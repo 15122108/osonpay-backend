@@ -199,12 +199,7 @@ async def run_migrations():
     await database.execute("CREATE INDEX IF NOT EXISTS idx_payme_tx          ON payme_transactions(payme_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_payme_user        ON payme_transactions(user_id)")
 
-    print("Migrations done!")
-
-
-async def seed_test_data():
-    """Payme test uchun test foydalanuvchi (har doim tekshiriladi)."""
-    # 1) User yaratish yoki topish
+    # ── Payme test foydalanuvchi (har doim tekshiriladi) ──
     existing = await database.fetch_one(
         "SELECT id FROM users WHERE phone=:p", {"p": "123"}
     )
@@ -215,14 +210,18 @@ async def seed_test_data():
                RETURNING id""",
             {}
         )
-        print(f"[Seed] Test user yaratildi: phone=123, id={existing['id']}")
-    else:
-        print(f"[Seed] Test user mavjud: phone=123, id={existing['id']}")
+        print(f"[Seed] Test user yaratildi: id={existing['id']}")
 
-    # 2) Wallet yo'q bo'lsa yaratish
     await database.execute(
         """INSERT INTO wallets (user_id, balance)
            VALUES (CAST(:uid AS UUID), 0.00)
            ON CONFLICT (user_id) DO NOTHING""",
         {"uid": str(existing["id"])}
     )
+
+    print("Migrations done!")
+
+
+async def seed_test_data():
+    """Backwards compat — eski main.py uchun."""
+    pass
