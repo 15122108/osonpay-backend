@@ -22,7 +22,7 @@ ERR_AUTH             = -32504
 ERR_INTERNAL         = -32400
 
 MIN_AMOUNT = 100_000        # 1 000 UZS tiyinda
-MAX_AMOUNT = 200_000_000    # 2 000 000 UZS tiyinda
+MAX_AMOUNT = 60_000_000    # 600 000 UZS tiyinda
 
 
 # ─── Yordamchi funksiyalar ───────────────────────────────────────────────────
