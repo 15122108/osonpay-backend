@@ -51,21 +51,31 @@ def err(request_id, code: int, message: str) -> dict:
 
 
 async def get_user_by_order(order_id) -> dict | None:
-    order_str = str(order_id)
+    order_str = str(order_id).strip()
 
-    # Telefon raqami orqali qidirish
+    # 1) To'g'ridan-to'g'ri telefon orqali (test: "123", real: "+998901234567")
     user = await database.fetch_one(
-        "SELECT id FROM users WHERE phone=:oid",
+        "SELECT id FROM users WHERE phone=:oid AND is_active=TRUE",
         {"oid": order_str}
     )
     if user:
         return user
 
-    # UUID orqali qidirish
+    # 2) 998 prefiksi bilan normalizatsiya (+998901234567 → 998901234567)
+    normalized = order_str.lstrip("+")
+    if normalized != order_str:
+        user = await database.fetch_one(
+            "SELECT id FROM users WHERE phone=:oid AND is_active=TRUE",
+            {"oid": normalized}
+        )
+        if user:
+            return user
+
+    # 3) UUID orqali
     try:
         uuid.UUID(order_str)
         user = await database.fetch_one(
-            "SELECT id FROM users WHERE id=:oid::uuid",
+            "SELECT id FROM users WHERE id=:oid::uuid AND is_active=TRUE",
             {"oid": order_str}
         )
         return user
