@@ -222,7 +222,7 @@ async def seed_test_data():
     # 2) Wallet yo'q bo'lsa yaratish
     await database.execute(
         """INSERT INTO wallets (user_id, balance)
-           VALUES (:uid::uuid, 0.00)
+           VALUES (CAST(:uid AS UUID), 0.00)
            ON CONFLICT (user_id) DO NOTHING""",
         {"uid": str(existing["id"])}
     )
