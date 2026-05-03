@@ -214,7 +214,7 @@ async def run_migrations():
 
     await database.execute(
         """INSERT INTO wallets (user_id, balance)
-           VALUES (CAST(:uid AS UUID), 0.00)
+           VALUES (:uid, 0.00)
            ON CONFLICT (user_id) DO NOTHING""",
         {"uid": str(existing["id"])}
     )
