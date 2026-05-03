@@ -193,8 +193,8 @@ async def handle_create(req_id, params):
             "state": 1,
         })
 
-    # Konkurrentlik: foydalanuvchida yangi (12 soatdan yosh) state=1 tranzaksiya bormi?
-    stale_cutoff = int((time.time() - 43200) * 1000)  # 12 soat
+    # Konkurrentlik: foydalanuvchida yangi (2 daqiqadan yosh) state=1 tranzaksiya bormi?
+    stale_cutoff = int((time.time() - 120) * 1000)  # 2 daqiqa
     active = await database.fetch_one(
         """SELECT payme_id FROM payme_transactions
            WHERE user_id = :uid AND state = 1
