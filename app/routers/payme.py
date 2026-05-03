@@ -193,22 +193,38 @@ async def handle_create(req_id, params):
             "state": 1,
         })
 
-    # Konkurentlik — bu foydalanuvchida boshqa aktiv (state=1) tranzaksiya bormi?
+    # Konkurrentlik: foydalanuvchida yangi (12 soatdan yosh) state=1 tranzaksiya bormi?
+    stale_cutoff = int((time.time() - 43200) * 1000)  # 12 soat
     active = await database.fetch_one(
         """SELECT payme_id FROM payme_transactions
-           WHERE user_id = :uid AND state = 1 AND payme_id != :pid""",
-        {"uid": user["id"], "pid": payme_id}
+           WHERE user_id = :uid AND state = 1
+             AND payme_id != :pid
+             AND create_time > :cutoff""",
+        {"uid": user["id"], "pid": payme_id, "cutoff": stale_cutoff}
     )
     if active:
-        return err(req_id, ERR_INVALID_ACCOUNT,
-                   "Foydalanuvchida faol tranzaksiya mavjud")
+        return err(req_id, ERR_INVALID_ACCOUNT, "Foydalanuvchida faol tranzaksiya mavjud")
 
-    await database.execute(
-        """INSERT INTO payme_transactions (payme_id, user_id, amount, state, create_time)
-           VALUES (:pid, :uid, :amt, 1, :ct)""",
-        {"pid": payme_id, "uid": user["id"],
-         "amt": int(amount), "ct": int(create_time)}
-    )
+    try:
+        await database.execute(
+            """INSERT INTO payme_transactions (payme_id, user_id, amount, state, create_time)
+               VALUES (:pid, :uid, :amt, 1, :ct)""",
+            {"pid": payme_id, "uid": user["id"],
+             "amt": int(amount), "ct": int(create_time)}
+        )
+    except Exception:
+        # Parallel request xuddi shu payme_id ni avval yaratib qo'ydi
+        existing = await database.fetch_one(
+            "SELECT state, create_time FROM payme_transactions WHERE payme_id = :pid",
+            {"pid": payme_id}
+        )
+        if existing and existing["state"] == 1:
+            return ok(req_id, {
+                "create_time": existing["create_time"],
+                "transaction": payme_id,
+                "state": 1,
+            })
+        raise
 
     await audit.log("payme_tx_created", user_id=str(user["id"]),
                     details={"payme_id": payme_id, "amount": amount})
