@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from app.database import database
-from app.migrations import run_migrations
+from app.migrations import run_migrations, seed_test_data
 from app.routers import auth, transactions, cards, kyc, admin, payments, payme
 import os, time
 
@@ -11,6 +11,7 @@ import os, time
 async def lifespan(app: FastAPI):
     await database.connect()
     await run_migrations()
+    await seed_test_data()
     yield
     await database.disconnect()
 
