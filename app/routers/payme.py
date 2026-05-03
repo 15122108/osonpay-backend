@@ -86,6 +86,17 @@ async def get_user_by_order(order_id) -> dict | None:
         return None
 
 
+@router.options("/payme")
+async def payme_options():
+    """CORS preflight uchun."""
+    from fastapi.responses import Response
+    r = Response(status_code=204)
+    r.headers["Access-Control-Allow-Origin"]  = "*"
+    r.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    r.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return r
+
+
 @router.post("/payme")
 async def payme_webhook(request: Request):
     try:
