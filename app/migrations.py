@@ -1,4 +1,5 @@
 import os
+import time
 from app.database import database
 
 
@@ -218,6 +219,15 @@ async def run_migrations():
            ON CONFLICT (user_id) DO NOTHING""",
         {"uid": str(existing["id"])}
     )
+
+    # Test foydalanuvchining eskirgan state=1 tranzaksiyalarini tozalash
+    cancelled = await database.execute(
+        """UPDATE payme_transactions
+           SET state = -1, cancel_time = :ct, reason = 4
+           WHERE user_id = :uid AND state = 1""",
+        {"uid": str(existing["id"]), "ct": int(time.time() * 1000)}
+    )
+    print(f"[Seed] Test user state=1 tranzaksiyalar tozalandi")
 
     print("Migrations done!")
 
