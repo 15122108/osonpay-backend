@@ -1,3 +1,4 @@
+import os
 from app.database import database
 
 
@@ -199,3 +200,26 @@ async def run_migrations():
     await database.execute("CREATE INDEX IF NOT EXISTS idx_payme_user        ON payme_transactions(user_id)")
 
     print("Migrations done!")
+
+async def seed_test_data():
+    """Payme test uchun test foydalanuvchi yaratish (faqat non-production)."""
+    if os.getenv("NODE_ENV") == "production":
+        return
+
+    existing = await database.fetch_one(
+        "SELECT id FROM users WHERE phone=:p", {"p": "123"}
+    )
+    if not existing:
+        test_user = await database.fetch_one(
+            """INSERT INTO users (phone, full_name, is_verified, is_active)
+               VALUES ('123', 'Payme Test User', TRUE, TRUE)
+               RETURNING id""",
+            {}
+        )
+        await database.execute(
+            "INSERT INTO wallets (user_id, balance) VALUES (:uid::uuid, 0.00)",
+            {"uid": str(test_user["id"])}
+        )
+        print("[Seed] Payme test user yaratildi: phone=123")
+    else:
+        print("[Seed] Payme test user mavjud: phone=123")
