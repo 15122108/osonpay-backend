@@ -220,15 +220,22 @@ async def run_migrations():
         {"uid": str(existing["id"])}
     )
 
-    # Test foydalanuvchining eskirgan state=1 tranzaksiyalarini tozalash
-    # reason=3: tranzaksiya muddati o'tdi (Payme spetsifikatsiyasi)
+    # Eskirgan state=1 tranzaksiyalarni bekor qilish (reason=3)
     await database.execute(
         """UPDATE payme_transactions
            SET state = -1, cancel_time = :ct, reason = 3
            WHERE user_id = :uid AND state = 1""",
         {"uid": str(existing["id"]), "ct": int(time.time() * 1000)}
     )
-    print(f"[Seed] Test user state=1 tranzaksiyalar tozalandi (reason=3)")
+
+    # Avvalgi noto'g'ri reason=4 larni reason=3 ga tuzatish
+    await database.execute(
+        """UPDATE payme_transactions
+           SET reason = 3
+           WHERE user_id = :uid AND state = -1 AND reason = 4""",
+        {"uid": str(existing["id"])}
+    )
+    print("[Seed] Test user tranzaksiyalar tozalandi (reason=3)")
 
     print("Migrations done!")
 
