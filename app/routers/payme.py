@@ -192,7 +192,7 @@ async def create_transaction(req_id, params):
             return err(req_id, ERR_CANT_PERFORM, "Tranzaksiya holati xato")
         return ok(req_id, {
             "create_time": existing["create_time"],
-            "transaction": str(existing["payme_id"]),
+            "transaction": payme_tx_id,
             "state": 1
         })
 
@@ -203,11 +203,6 @@ async def create_transaction(req_id, params):
         {"pid": payme_tx_id, "uid": str(user_uuid), "amt": int(amount), "ct": int(create_time)}
     )
 
-    tx = await database.fetch_one(
-        "SELECT id FROM payme_transactions WHERE payme_id = :pid",
-        {"pid": payme_tx_id}
-    )
-
     await audit.log(
         "payme_tx_created",
         user_id=str(user_uuid),
@@ -216,7 +211,7 @@ async def create_transaction(req_id, params):
 
     return ok(req_id, {
         "create_time": int(create_time),
-        "transaction": str(tx["payme_id"]),
+        "transaction": payme_tx_id,
         "state": 1
     })
 
@@ -233,7 +228,7 @@ async def perform_transaction(req_id, params):
 
     if tx["state"] == 2:
         return ok(req_id, {
-            "transaction": str(tx["payme_id"]),
+            "transaction": payme_tx_id,
             "perform_time": tx["perform_time"],
             "state": 2
         })
@@ -289,7 +284,7 @@ async def perform_transaction(req_id, params):
         print(f"[Push] Xato: {e}")
 
     return ok(req_id, {
-        "transaction": str(tx["payme_id"]),
+        "transaction": payme_tx_id,
         "perform_time": perform_time,
         "state": 2
     })
@@ -308,7 +303,7 @@ async def check_transaction(req_id, params):
         "create_time":  tx["create_time"],
         "perform_time": tx["perform_time"] or 0,
         "cancel_time":  tx["cancel_time"] or 0,
-        "transaction": str(tx["payme_id"]),
+        "transaction": payme_tx_id,
         "state":        tx["state"],
         "reason":       tx["reason"],
     })
@@ -327,7 +322,7 @@ async def cancel_transaction(req_id, params):
 
     if tx["state"] == -1:
         return ok(req_id, {
-            "transaction": str(tx["payme_id"]),
+            "transaction": payme_tx_id,
             "cancel_time": tx["cancel_time"],
             "state": -1
         })
@@ -348,7 +343,7 @@ async def cancel_transaction(req_id, params):
     )
 
     return ok(req_id, {
-        "transaction": str(tx["payme_id"]),
+        "transaction": payme_tx_id,
         "cancel_time": cancel_time,
         "state": -1
     })
@@ -377,7 +372,7 @@ async def get_statement(req_id, params):
                 "create_time":  tx["create_time"],
                 "perform_time": tx["perform_time"] or 0,
                 "cancel_time":  tx["cancel_time"] or 0,
-                "transaction": str(tx["payme_id"]),
+                "transaction": payme_tx_id,
                 "state":        tx["state"],
                 "reason":       tx["reason"],
             }
