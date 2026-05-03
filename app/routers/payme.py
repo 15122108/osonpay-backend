@@ -185,12 +185,16 @@ async def create_transaction(req_id, params):
             "state": 1
         })
 
-    tx = await database.fetch_one(
+    await database.execute(
         """INSERT INTO payme_transactions
            (payme_id, user_id, amount, state, create_time)
-           VALUES (:pid, :uid, :amt, 1, :ct)
-           RETURNING *""",
-        {"pid": payme_tx_id, "uid": user_uuid, "amt": int(amount), "ct": int(create_time)}
+           VALUES (:pid, :uid, :amt, 1, :ct)""",
+        {"pid": payme_tx_id, "uid": str(user_uuid), "amt": int(amount), "ct": int(create_time)}
+    )
+
+    tx = await database.fetch_one(
+        "SELECT id FROM payme_transactions WHERE payme_id = :pid",
+        {"pid": payme_tx_id}
     )
 
     await audit.log(
@@ -236,12 +240,15 @@ async def perform_transaction(req_id, params):
             "UPDATE wallets SET balance = balance + :a, updated_at = NOW() WHERE user_id = :uid",
             {"a": amount_uzs, "uid": user_uuid}
         )
-        ledger_tx = await database.fetch_one(
+        await database.execute(
             """INSERT INTO transactions
                (receiver_id, amount, type, status, description, reference)
-               VALUES (:uid, :a, 'topup', 'completed', 'Payme orqali toldirish', :ref)
-               RETURNING id""",
-            {"uid": user_uuid, "a": amount_uzs, "ref": payme_tx_id}
+               VALUES (:uid, :a, 'topup', 'completed', 'Payme orqali toldirish', :ref)""",
+            {"uid": str(user_uuid), "a": amount_uzs, "ref": payme_tx_id}
+        )
+        ledger_tx = await database.fetch_one(
+            "SELECT id FROM transactions WHERE reference = :ref",
+            {"ref": payme_tx_id}
         )
         await database.execute(
             "UPDATE payme_transactions SET state = 2, perform_time = :pt WHERE payme_id = :pid",
