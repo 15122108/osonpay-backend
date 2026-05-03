@@ -359,9 +359,11 @@ async def get_statement(req_id, params):
     to_time   = params.get("to", int(time.time() * 1000))
 
     rows = await database.fetch_all(
-        """SELECT * FROM payme_transactions
-           WHERE create_time >= :f AND create_time <= :t
-           ORDER BY create_time ASC""",
+        """SELECT pt.*, u.phone
+           FROM payme_transactions pt
+           LEFT JOIN users u ON u.id = pt.user_id
+           WHERE pt.create_time >= :f AND pt.create_time <= :t
+           ORDER BY pt.create_time ASC""",
         {"f": int(from_time), "t": int(to_time)}
     )
 
@@ -371,7 +373,7 @@ async def get_statement(req_id, params):
                 "id":           tx["payme_id"],
                 "time":         tx["create_time"],
                 "amount":       tx["amount"],
-                "account":      {"order_id": str(tx["user_id"])},
+                "account":      {"id": tx["phone"] or str(tx["user_id"])},
                 "create_time":  tx["create_time"],
                 "perform_time": tx["perform_time"] or 0,
                 "cancel_time":  tx["cancel_time"] or 0,
