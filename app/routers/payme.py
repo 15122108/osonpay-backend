@@ -364,3 +364,9 @@ async def get_statement(req_id, params):
             for tx in rows
         ]
     })
+
+
+@router.get("/payme-version")
+async def payme_version():
+    """Deploy tekshirish uchun — yangi kod ishlayotganini ko'rsatadi."""
+    return {"version": "2.1", "payme_key_set": bool(PAYME_KEY)}
