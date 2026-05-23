@@ -6,6 +6,7 @@ from app.utils.deps import get_user
 from app.utils.auth import mask_card, tokenize_card, gen_ref
 from app.utils import audit
 from app.utils.rate_limit import get_client_ip
+from app.services.commission import credit_commission
 
 router = APIRouter()
 COMMISSION_RATE = 0.01
@@ -176,6 +177,12 @@ async def card_transfer(b: CardTransferReq, request: Request, uid: str = Depends
             "UPDATE wallets SET balance=balance+:a, updated_at=NOW() WHERE user_id=:uid",
             {"a": b.amount, "uid": str(to_card["owner_id"])}
         )
+        commission_user_id = await credit_commission(
+            fee,
+            source_user_id=uid,
+            reference=ref,
+            description="Karta o'tkazmasi komissiyasi",
+        )
         tx = await database.fetch_one(
             """INSERT INTO transactions
                (sender_id, receiver_id, amount, fee, type, status, description, reference)
@@ -187,7 +194,7 @@ async def card_transfer(b: CardTransferReq, request: Request, uid: str = Depends
     await audit.log(
         "card_transfer", user_id=uid,
         entity_type="transaction", entity_id=str(tx["id"]),
-        details={"amount": b.amount, "fee": fee, "to_card": b.to_card_number[-4:], "ref": ref},
+        details={"amount": b.amount, "fee": fee, "commission_user_id": commission_user_id, "to_card": b.to_card_number[-4:], "ref": ref},
         ip_address=ip
     )
 
@@ -257,6 +264,12 @@ async def pay_by_qr(b: QRPayReq, request: Request, uid: str = Depends(get_user))
             "UPDATE wallets SET balance=balance+:a, updated_at=NOW() WHERE user_id=:uid",
             {"a": b.amount, "uid": receiver_id}
                   )
+        commission_user_id = await credit_commission(
+            fee,
+            source_user_id=uid,
+            reference=ref,
+            description="QR to'lov komissiyasi",
+        )
         tx = await database.fetch_one(
             """INSERT INTO transactions
                (sender_id, receiver_id, amount, fee, type, status, description, reference)
@@ -268,7 +281,7 @@ async def pay_by_qr(b: QRPayReq, request: Request, uid: str = Depends(get_user))
     await audit.log(
         "qr_payment", user_id=uid,
         entity_type="transaction", entity_id=str(tx["id"]),
-        details={"amount": b.amount, "fee": fee, "receiver": receiver_id, "ref": ref},
+        details={"amount": b.amount, "fee": fee, "commission_user_id": commission_user_id, "receiver": receiver_id, "ref": ref},
         ip_address=ip
     )
 

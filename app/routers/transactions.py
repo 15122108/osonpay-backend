@@ -8,6 +8,7 @@ from app.utils.rate_limit import check_rate_limit, get_client_ip
 from app.utils import audit
 from app.services.fcm import notify_transaction
 from app.services.ai_fraud import check_transaction
+from app.services.commission import credit_commission
 
 router = APIRouter()
 COMMISSION_RATE = 0.01
@@ -104,6 +105,12 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
             "UPDATE wallets SET balance=balance+:a, updated_at=NOW() WHERE user_id=:id",
             {"a": b.amount, "id": str(rec["id"])}
         )
+        commission_user_id = await credit_commission(
+            fee,
+            source_user_id=uid,
+            reference=ref,
+            description="Pul o'tkazma komissiyasi",
+        )
         tx = await database.fetch_one(
             """INSERT INTO transactions
                (sender_id, receiver_id, amount, fee, type, status, description, reference)
@@ -122,6 +129,7 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
             "amount": b.amount,
             "fee": fee,
             "receiver": b.receiverPhone,
+            "commission_user_id": commission_user_id,
             "ref": ref,
             "fraud_risk": fraud["risk"]
         },
