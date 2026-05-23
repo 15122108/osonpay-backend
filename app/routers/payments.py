@@ -27,6 +27,31 @@ class TopUpInitReq(BaseModel):
     amount: float
 
 
+SERVICE_ITEMS = [
+    {"id": "popular", "name": "Ko'p qo'llaniladigan", "icon": "list", "category": "popular", "badge": "1%"},
+    {"id": "mobile", "name": "Mobil operatorlar", "icon": "phone", "category": "mobile", "badge": "1%"},
+    {"id": "internet", "name": "Internet provayderlar", "icon": "globe", "category": "internet", "badge": "1%"},
+    {"id": "utilities", "name": "Kommunal to'lovlar", "icon": "home", "category": "utilities", "badge": "1%"},
+    {"id": "bank", "name": "Bank xizmatlari", "icon": "bank", "category": "bank", "badge": "1%"},
+    {"id": "charity", "name": "Xayriya", "icon": "heart", "category": "charity", "badge": "1%"},
+]
+
+
+@router.get("/saved")
+async def saved_payments(uid: str = Depends(get_user)):
+    return {"items": []}
+
+
+@router.get("/home")
+async def my_home(uid: str = Depends(get_user)):
+    return {"items": []}
+
+
+@router.get("/services")
+async def services(uid: str = Depends(get_user)):
+    return {"items": SERVICE_ITEMS}
+
+
 # ─────────────────────────────────────────────
 # 1. To'ldirish boshlash → PayTech redirect URL
 # ─────────────────────────────────────────────

@@ -8,6 +8,7 @@ from app.utils import audit
 from app.utils.rate_limit import get_client_ip
 
 router = APIRouter()
+COMMISSION_RATE = 0.01
 
 COLORS = {
     "uzcard":     ("#7B2FBE", "#FF6B00"),
@@ -31,6 +32,10 @@ class CardTransferReq(BaseModel):
 class QRPayReq(BaseModel):
     qr_data: str
     amount: float
+
+
+def calc_fee(amount: float) -> float:
+    return round(float(amount) * COMMISSION_RATE, 2)
 
 
 @router.get("")
@@ -137,7 +142,10 @@ async def card_transfer(b: CardTransferReq, request: Request, uid: str = Depends
         "SELECT balance FROM wallets WHERE user_id=:uid",
         {"uid": uid}
     )
-    if not wallet or float(wallet["balance"]) < b.amount:
+    fee = calc_fee(b.amount)
+    debit_amount = b.amount + fee
+
+    if not wallet or float(wallet["balance"]) < debit_amount:
         raise HTTPException(400, "Mablag' yetarli emas")
 
     clean = b.to_card_number.replace(" ", "")
@@ -162,7 +170,7 @@ async def card_transfer(b: CardTransferReq, request: Request, uid: str = Depends
     async with database.transaction():
         await database.execute(
             "UPDATE wallets SET balance=balance-:a, updated_at=NOW() WHERE user_id=:uid",
-            {"a": b.amount, "uid": uid}
+            {"a": debit_amount, "uid": uid}
         )
         await database.execute(
             "UPDATE wallets SET balance=balance+:a, updated_at=NOW() WHERE user_id=:uid",
@@ -170,20 +178,20 @@ async def card_transfer(b: CardTransferReq, request: Request, uid: str = Depends
         )
         tx = await database.fetch_one(
             """INSERT INTO transactions
-               (sender_id, receiver_id, amount, type, status, description, reference)
-               VALUES (:s, :r, :a, 'card_transfer', 'completed', 'Karta orqali otkazma', :ref)
+               (sender_id, receiver_id, amount, fee, type, status, description, reference)
+               VALUES (:s, :r, :a, :fee, 'card_transfer', 'completed', 'Karta orqali otkazma', :ref)
                RETURNING *""",
-            {"s": uid, "r": str(to_card["owner_id"]), "a": b.amount, "ref": ref}
+            {"s": uid, "r": str(to_card["owner_id"]), "a": b.amount, "fee": fee, "ref": ref}
         )
 
     await audit.log(
         "card_transfer", user_id=uid,
         entity_type="transaction", entity_id=str(tx["id"]),
-        details={"amount": b.amount, "to_card": b.to_card_number[-4:], "ref": ref},
+        details={"amount": b.amount, "fee": fee, "to_card": b.to_card_number[-4:], "ref": ref},
         ip_address=ip
     )
 
-    return {"success": True, "reference": ref, "transaction": dict(tx)}
+    return {"success": True, "reference": ref, "transaction": dict(tx), "fee": fee, "total": debit_amount}
 
 
 @router.get("/qr")
@@ -225,7 +233,10 @@ async def pay_by_qr(b: QRPayReq, request: Request, uid: str = Depends(get_user))
         "SELECT balance FROM wallets WHERE user_id=:uid",
         {"uid": uid}
     )
-    if not wallet or float(wallet["balance"]) < b.amount:
+    fee = calc_fee(b.amount)
+    debit_amount = b.amount + fee
+
+    if not wallet or float(wallet["balance"]) < debit_amount:
         raise HTTPException(400, "Mablag' yetarli emas")
 
     receiver = await database.fetch_one(
@@ -240,7 +251,7 @@ async def pay_by_qr(b: QRPayReq, request: Request, uid: str = Depends(get_user))
     async with database.transaction():
         await database.execute(
             "UPDATE wallets SET balance=balance-:a, updated_at=NOW() WHERE user_id=:uid",
-            {"a": b.amount, "uid": uid}
+            {"a": debit_amount, "uid": uid}
         )
         await database.execute(
             "UPDATE wallets SET balance=balance+:a, updated_at=NOW() WHERE user_id=:uid",
@@ -248,17 +259,17 @@ async def pay_by_qr(b: QRPayReq, request: Request, uid: str = Depends(get_user))
                   )
         tx = await database.fetch_one(
             """INSERT INTO transactions
-               (sender_id, receiver_id, amount, type, status, description, reference)
-               VALUES (:s, :r, :a, 'qr_payment', 'completed', 'QR orqali tolov', :ref)
+               (sender_id, receiver_id, amount, fee, type, status, description, reference)
+               VALUES (:s, :r, :a, :fee, 'qr_payment', 'completed', 'QR orqali tolov', :ref)
                RETURNING *""",
-            {"s": uid, "r": receiver_id, "a": b.amount, "ref": ref}
+            {"s": uid, "r": receiver_id, "a": b.amount, "fee": fee, "ref": ref}
         )
 
     await audit.log(
         "qr_payment", user_id=uid,
         entity_type="transaction", entity_id=str(tx["id"]),
-        details={"amount": b.amount, "receiver": receiver_id, "ref": ref},
+        details={"amount": b.amount, "fee": fee, "receiver": receiver_id, "ref": ref},
         ip_address=ip
     )
 
-    return {"success": True, "reference": ref, "transaction": dict(tx)}
+    return {"success": True, "reference": ref, "transaction": dict(tx), "fee": fee, "total": debit_amount}

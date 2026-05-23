@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from app.database import database
 from app.migrations import run_migrations
-from app.routers import auth, transactions, cards, kyc, admin, payments, payme
+from app.routers import auth, transactions, cards, kyc, admin, payments
 import os, time
 
 @asynccontextmanager
@@ -63,7 +63,6 @@ app.include_router(cards.router,        prefix="/api/cards",        tags=["cards
 app.include_router(kyc.router,          prefix="/api/kyc",          tags=["kyc"])
 app.include_router(admin.router,        prefix="/api/admin",        tags=["admin"])
 app.include_router(payments.router,     prefix="/api/payments",     tags=["payments"])
-app.include_router(payme.router,        prefix="/api/payments",     tags=["payme"])
 
 @app.get("/")
 async def root():

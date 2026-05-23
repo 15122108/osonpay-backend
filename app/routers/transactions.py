@@ -10,6 +10,7 @@ from app.services.fcm import notify_transaction
 from app.services.ai_fraud import check_transaction
 
 router = APIRouter()
+COMMISSION_RATE = 0.01
 
 class SendReq(BaseModel):
     receiverPhone: str
@@ -23,6 +24,10 @@ class TopUpReq(BaseModel):
 class FCMTokenReq(BaseModel):
     token: str
     platform: str = "android"
+
+
+def calc_fee(amount: float) -> float:
+    return round(float(amount) * COMMISSION_RATE, 2)
 
 
 @router.post("/fcm-token")
@@ -55,7 +60,10 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
         raise HTTPException(404, "Foydalanuvchi topilmadi")
     if sender["is_frozen"]:
         raise HTTPException(403, "Hisobingiz muzlatilgan")
-    if float(sender["balance"]) < b.amount:
+    fee = calc_fee(b.amount)
+    debit_amount = b.amount + fee
+
+    if float(sender["balance"]) < debit_amount:
         raise HTTPException(400, "Mablag' yetarli emas")
 
     rec = await database.fetch_one(
@@ -90,7 +98,7 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
     async with database.transaction():
         await database.execute(
             "UPDATE wallets SET balance=balance-:a, updated_at=NOW() WHERE user_id=:id",
-            {"a": b.amount, "id": uid}
+            {"a": debit_amount, "id": uid}
         )
         await database.execute(
             "UPDATE wallets SET balance=balance+:a, updated_at=NOW() WHERE user_id=:id",
@@ -98,11 +106,11 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
         )
         tx = await database.fetch_one(
             """INSERT INTO transactions
-               (sender_id, receiver_id, amount, type, status, description, reference)
-               VALUES (:s, :r, :a, 'send', 'completed', :d, :ref)
+               (sender_id, receiver_id, amount, fee, type, status, description, reference)
+               VALUES (:s, :r, :a, :fee, 'send', 'completed', :d, :ref)
                RETURNING *""",
             {"s": uid, "r": str(rec["id"]), "a": b.amount,
-             "d": b.description or "Pul o'tkazma", "ref": ref}
+             "fee": fee, "d": b.description or "Pul o'tkazma", "ref": ref}
         )
 
     await audit.log(
@@ -112,6 +120,7 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
         entity_id=str(tx["id"]),
         details={
             "amount": b.amount,
+            "fee": fee,
             "receiver": b.receiverPhone,
             "ref": ref,
             "fraud_risk": fraud["risk"]
@@ -127,7 +136,7 @@ async def send(b: SendReq, request: Request, uid: str = Depends(get_user)):
         ref=ref
     )
 
-    return {"success": True, "transaction": dict(tx), "fraud_risk": fraud["risk"]}
+    return {"success": True, "transaction": dict(tx), "fee": fee, "total": debit_amount, "fraud_risk": fraud["risk"]}
 
 
 @router.post("/topup")
@@ -214,3 +223,42 @@ async def history(
         "page": page,
         "limit": limit
     }
+
+
+@router.get("/stats")
+async def stats(uid: str = Depends(get_user)):
+    row = await database.fetch_one(
+        """SELECT
+              COALESCE(SUM(CASE WHEN receiver_id=:uid THEN amount ELSE 0 END), 0) AS total_in,
+              COALESCE(SUM(CASE WHEN sender_id=:uid THEN amount + fee ELSE 0 END), 0) AS total_out,
+              COALESCE(SUM(fee), 0) AS total_fee,
+              COUNT(*) AS total_count
+           FROM transactions
+           WHERE sender_id=:uid OR receiver_id=:uid""",
+        {"uid": uid}
+    )
+    return {
+        "stats": {
+            "total_in": float(row["total_in"]),
+            "total_out": float(row["total_out"]),
+            "total_fee": float(row["total_fee"]),
+            "total_count": row["total_count"],
+            "commission_rate": COMMISSION_RATE,
+        }
+    }
+
+
+@router.get("/{tx_id}")
+async def get_transaction(tx_id: str, uid: str = Depends(get_user)):
+    tx = await database.fetch_one(
+        """SELECT t.*, s.full_name as sender_name, s.phone as sender_phone,
+                  r.full_name as receiver_name, r.phone as receiver_phone
+           FROM transactions t
+           LEFT JOIN users s ON s.id=t.sender_id
+           LEFT JOIN users r ON r.id=t.receiver_id
+           WHERE t.id=:id AND (t.sender_id=:uid OR t.receiver_id=:uid)""",
+        {"id": tx_id, "uid": uid}
+    )
+    if not tx:
+        raise HTTPException(404, "Tranzaksiya topilmadi")
+    return {"transaction": dict(tx)}

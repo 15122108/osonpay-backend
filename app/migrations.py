@@ -1,5 +1,4 @@
 import os
-import time
 from app.database import database
 
 
@@ -169,22 +168,6 @@ async def run_migrations():
         )
     """)
 
-    await database.execute("""
-        CREATE TABLE IF NOT EXISTS payme_transactions (
-            id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            payme_id     VARCHAR(100) UNIQUE NOT NULL,
-            user_id      UUID REFERENCES users(id),
-            amount       BIGINT NOT NULL,
-            state        INT DEFAULT 1,
-            create_time  BIGINT,
-            perform_time BIGINT,
-            cancel_time  BIGINT,
-            reason       INT,
-            created_at   TIMESTAMP DEFAULT NOW()
-        )
-    """)
-
-    # ── Indekslar ──────────────────────────────────────
     await database.execute("CREATE INDEX IF NOT EXISTS idx_otps_phone        ON otps(phone)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_tx_sender         ON transactions(sender_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_tx_receiver       ON transactions(receiver_id)")
@@ -197,49 +180,5 @@ async def run_migrations():
     await database.execute("CREATE INDEX IF NOT EXISTS idx_fraud_sender      ON fraud_logs(sender_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_pending_pid       ON pending_payments(paytech_payment_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_pending_user      ON pending_payments(user_id)")
-    await database.execute("CREATE INDEX IF NOT EXISTS idx_payme_tx          ON payme_transactions(payme_id)")
-    await database.execute("CREATE INDEX IF NOT EXISTS idx_payme_user        ON payme_transactions(user_id)")
-
-    # ── Payme test foydalanuvchi (har doim tekshiriladi) ──
-    existing = await database.fetch_one(
-        "SELECT id FROM users WHERE phone=:p", {"p": "123"}
-    )
-    if not existing:
-        existing = await database.fetch_one(
-            """INSERT INTO users (phone, full_name, is_verified, is_active)
-               VALUES ('123', 'Payme Test User', TRUE, TRUE)
-               RETURNING id""",
-            {}
-        )
-        print(f"[Seed] Test user yaratildi: id={existing['id']}")
-
-    await database.execute(
-        """INSERT INTO wallets (user_id, balance)
-           VALUES (:uid, 0.00)
-           ON CONFLICT (user_id) DO NOTHING""",
-        {"uid": str(existing["id"])}
-    )
-
-    # Eskirgan state=1 tranzaksiyalarni bekor qilish (reason=3)
-    await database.execute(
-        """UPDATE payme_transactions
-           SET state = -1, cancel_time = :ct, reason = 3
-           WHERE user_id = :uid AND state = 1""",
-        {"uid": str(existing["id"]), "ct": int(time.time() * 1000)}
-    )
-
-    # Avvalgi noto'g'ri reason=4 larni reason=3 ga tuzatish
-    await database.execute(
-        """UPDATE payme_transactions
-           SET reason = 3
-           WHERE user_id = :uid AND state = -1 AND reason = 4""",
-        {"uid": str(existing["id"])}
-    )
-    print("[Seed] Test user tranzaksiyalar tozalandi (reason=3)")
 
     print("Migrations done!")
-
-
-async def seed_test_data():
-    """Backwards compat — eski main.py uchun."""
-    pass
