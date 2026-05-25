@@ -298,6 +298,24 @@ async def home_summary(uid: str = Depends(get_user)):
     }
 
 
+@router.get("/export")
+async def export_history(uid: str = Depends(get_user)):
+    rows = await database.fetch_all(
+        """SELECT t.id, t.type, t.status, t.amount, t.fee, t.description,
+                  t.reference, t.created_at,
+                  s.full_name as sender_name, s.phone as sender_phone,
+                  r.full_name as receiver_name, r.phone as receiver_phone
+           FROM transactions t
+           LEFT JOIN users s ON s.id = t.sender_id
+           LEFT JOIN users r ON r.id = t.receiver_id
+           WHERE t.sender_id=:uid OR t.receiver_id=:uid
+           ORDER BY t.created_at DESC
+           LIMIT 1000""",
+        {"uid": uid},
+    )
+    return {"success": True, "items": [dict(r) for r in rows]}
+
+
 @router.get("/{tx_id}")
 async def get_transaction(tx_id: str, uid: str = Depends(get_user)):
     tx = await database.fetch_one(
