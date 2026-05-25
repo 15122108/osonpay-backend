@@ -6,6 +6,8 @@ from app.utils import audit
 from app.utils.rate_limit import get_client_ip
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from passlib.context import CryptContext
+from app.services.fcm import get_user_tokens, send_push
+from app.services.ai_fraud import check_transaction
 import os
 
 router = APIRouter()
@@ -32,6 +34,22 @@ class BlockUserReq(BaseModel):
 class KYCReviewReq(BaseModel):
     status: str
     reason: str = ""
+
+class NotifyUserReq(BaseModel):
+    title: str
+    body: str
+    data: dict = {}
+
+class BroadcastReq(BaseModel):
+    title: str
+    body: str
+    data: dict = {}
+
+class AnalyzeP2PReq(BaseModel):
+    sender_id: str
+    receiver_id: str
+    amount: float
+    description: str = ""
 
 @router.post("/login")
 async def admin_login(b: AdminLoginReq, request: Request):
@@ -268,3 +286,78 @@ async def admin_audit(page: int = 1, limit: int = 100, admin=Depends(get_admin))
         {"l": limit, "o": offset}
     )
     return {"logs": [dict(r) for r in rows]}
+
+
+@router.get("/fraud-logs")
+async def admin_fraud_logs(
+    page: int = 1,
+    limit: int = 100,
+    risk_level: str = "",
+    action: str = "",
+    admin=Depends(get_admin),
+):
+    if limit > 200:
+        limit = 200
+    offset = (page - 1) * limit
+    where = "WHERE 1=1"
+    params = {"limit": limit, "offset": offset}
+    if risk_level:
+        where += " AND f.risk_level=:risk_level"
+        params["risk_level"] = risk_level
+    if action:
+        where += " AND f.action=:action"
+        params["action"] = action
+
+    rows = await database.fetch_all(
+        f"""SELECT f.*, s.phone as sender_phone, r.phone as receiver_phone
+            FROM fraud_logs f
+            LEFT JOIN users s ON s.id=f.sender_id
+            LEFT JOIN users r ON r.id=f.receiver_id
+            {where}
+            ORDER BY f.created_at DESC
+            LIMIT :limit OFFSET :offset""",
+        params,
+    )
+    total = await database.fetch_one(
+        f"SELECT COUNT(*) as c FROM fraud_logs f {where}",
+        {k: v for k, v in params.items() if k not in ("limit", "offset")},
+    )
+    return {"logs": [dict(r) for r in rows], "total": total["c"], "page": page}
+
+
+@router.post("/ai/analyze-p2p")
+async def admin_ai_analyze_p2p(b: AnalyzeP2PReq, admin=Depends(get_admin)):
+    result = await check_transaction(
+        sender_id=b.sender_id,
+        receiver_id=b.receiver_id,
+        amount=b.amount,
+        description=b.description,
+    )
+    return {"success": True, "analysis": result}
+
+
+@router.post("/users/{uid}/notify")
+async def admin_notify_user(uid: str, b: NotifyUserReq, request: Request, admin=Depends(get_admin)):
+    tokens = await get_user_tokens(database, uid)
+    sent = await send_push(tokens, b.title, b.body, b.data or {"type": "admin_message"})
+    await audit.log(
+        "admin_notify_user",
+        entity_type="user",
+        entity_id=uid,
+        details={"title": b.title, "sent": sent, "admin": admin.get("adminId")},
+        ip_address=get_client_ip(request),
+    )
+    return {"success": True, "sent": sent, "tokens": len(tokens)}
+
+
+@router.post("/notifications/broadcast")
+async def admin_broadcast(b: BroadcastReq, request: Request, admin=Depends(get_admin)):
+    rows = await database.fetch_all("SELECT token FROM fcm_tokens")
+    tokens = [r["token"] for r in rows]
+    sent = await send_push(tokens, b.title, b.body, b.data or {"type": "admin_broadcast"})
+    await audit.log(
+        "admin_broadcast",
+        details={"title": b.title, "sent": sent, "tokens": len(tokens), "admin": admin.get("adminId")},
+        ip_address=get_client_ip(request),
+    )
+    return {"success": True, "sent": sent, "tokens": len(tokens)}

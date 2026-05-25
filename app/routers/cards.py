@@ -8,6 +8,7 @@ from app.utils import audit
 from app.utils.rate_limit import get_client_ip
 from app.services.commission import credit_commission
 from app.services.card_validation import expiry_ok, validate_card_number
+from app.services.ai_fraud import check_transaction
 
 router = APIRouter()
 COMMISSION_RATE = 0.01
@@ -171,6 +172,21 @@ async def card_transfer(b: CardTransferReq, request: Request, uid: str = Depends
     if str(to_card["owner_id"]) == uid:
         raise HTTPException(400, "O'z kartangizga o'tkazib bo'lmaydi")
 
+    fraud = await check_transaction(
+        sender_id=uid,
+        receiver_id=str(to_card["owner_id"]),
+        amount=b.amount,
+        description="Karta orqali o'tkazma",
+    )
+    if fraud["blocked"]:
+        await audit.log(
+            "card_transfer_blocked",
+            user_id=uid,
+            details={"amount": b.amount, "reason": fraud["reason"], "risk": fraud["risk"]},
+            ip_address=ip,
+        )
+        raise HTTPException(403, f"Tranzaksiya xavfsizlik tizimi tomonidan bloklandi: {fraud['reason']}")
+
     ref = gen_ref()
 
     async with database.transaction():
@@ -203,7 +219,7 @@ async def card_transfer(b: CardTransferReq, request: Request, uid: str = Depends
         ip_address=ip
     )
 
-    return {"success": True, "reference": ref, "transaction": dict(tx), "fee": fee, "total": debit_amount}
+    return {"success": True, "reference": ref, "transaction": dict(tx), "fee": fee, "total": debit_amount, "fraud_risk": fraud["risk"]}
 
 
 @router.get("/qr")
@@ -258,6 +274,21 @@ async def pay_by_qr(b: QRPayReq, request: Request, uid: str = Depends(get_user))
     if not receiver:
         raise HTTPException(404, "Qabul qiluvchi topilmadi")
 
+    fraud = await check_transaction(
+        sender_id=uid,
+        receiver_id=receiver_id,
+        amount=b.amount,
+        description="QR orqali to'lov",
+    )
+    if fraud["blocked"]:
+        await audit.log(
+            "qr_payment_blocked",
+            user_id=uid,
+            details={"amount": b.amount, "reason": fraud["reason"], "risk": fraud["risk"]},
+            ip_address=ip,
+        )
+        raise HTTPException(403, f"Tranzaksiya xavfsizlik tizimi tomonidan bloklandi: {fraud['reason']}")
+
     ref = gen_ref()
 
     async with database.transaction():
@@ -290,4 +321,4 @@ async def pay_by_qr(b: QRPayReq, request: Request, uid: str = Depends(get_user))
         ip_address=ip
     )
 
-    return {"success": True, "reference": ref, "transaction": dict(tx), "fee": fee, "total": debit_amount}
+    return {"success": True, "reference": ref, "transaction": dict(tx), "fee": fee, "total": debit_amount, "fraud_risk": fraud["risk"]}
