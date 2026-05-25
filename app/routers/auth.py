@@ -61,7 +61,7 @@ async def send_otp(b: OTPReq, request: Request):
 
     res = {"success": True, "isNewUser": user is None, "message": "Kod yuborildi"}
     eskiz_activated = os.getenv("ESKIZ_ACTIVATED", "false").lower() == "true"
-    if not eskiz_activated:
+    if ENV != "production" and not eskiz_activated:
         res["devCode"] = code
     return res
 

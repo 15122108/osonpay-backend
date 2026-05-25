@@ -168,6 +168,22 @@ async def run_migrations():
         )
     """)
 
+    await database.execute("""
+        CREATE TABLE IF NOT EXISTS payme_transactions (
+            id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            payme_id     VARCHAR(100) UNIQUE NOT NULL,
+            user_id      UUID REFERENCES users(id),
+            amount       BIGINT NOT NULL,
+            state        INT NOT NULL DEFAULT 1,
+            reason       INT,
+            create_time  BIGINT NOT NULL,
+            perform_time BIGINT,
+            cancel_time  BIGINT,
+            created_at   TIMESTAMP DEFAULT NOW(),
+            updated_at   TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
     await database.execute("CREATE INDEX IF NOT EXISTS idx_otps_phone        ON otps(phone)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_tx_sender         ON transactions(sender_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_tx_receiver       ON transactions(receiver_id)")
@@ -180,5 +196,7 @@ async def run_migrations():
     await database.execute("CREATE INDEX IF NOT EXISTS idx_fraud_sender      ON fraud_logs(sender_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_pending_pid       ON pending_payments(paytech_payment_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_pending_user      ON pending_payments(user_id)")
+    await database.execute("CREATE INDEX IF NOT EXISTS idx_payme_tx          ON payme_transactions(payme_id)")
+    await database.execute("CREATE INDEX IF NOT EXISTS idx_payme_user        ON payme_transactions(user_id)")
 
     print("Migrations done!")

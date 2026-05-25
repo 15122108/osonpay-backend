@@ -204,7 +204,7 @@ async def paytech_webhook(request: Request):
                 amt_fmt = f"{amount_uzs:,.0f}".replace(",", " ")
                 await send_push(
                     tokens,
-                    title="Hisob to'ldirildi ✅",
+                    title="Hisob to'ldirildi",
                     body=f"{amt_fmt} UZS hisobingizga tushdi",
                     data={"type": "topup", "reference": ref}
                 )
