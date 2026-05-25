@@ -6,6 +6,7 @@ from app.database import database
 from app.migrations import run_migrations
 from app.routers import auth, transactions, cards, kyc, admin, payments
 import os, time
+from collections import defaultdict, deque
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,13 +23,59 @@ app = FastAPI(
     redoc_url=None
 )
 
+def _cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ORIGINS", "")
+    origins = [o.strip() for o in raw.split(",") if o.strip()]
+    if origins:
+        return origins
+    if os.getenv("NODE_ENV") == "production":
+        return []
+    return ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=False,
 )
+
+_ip_hits: dict[str, deque[float]] = defaultdict(deque)
+GLOBAL_RATE_LIMIT = int(os.getenv("GLOBAL_RATE_LIMIT_PER_MINUTE", "180"))
+MAX_BODY_BYTES = int(os.getenv("MAX_REQUEST_BODY_BYTES", "1048576"))
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+@app.middleware("http")
+async def request_guard(request: Request, call_next):
+    if request.url.path not in ("/", "/api/health"):
+        now = time.time()
+        ip = _client_ip(request)
+        hits = _ip_hits[ip]
+        while hits and hits[0] < now - 60:
+            hits.popleft()
+        if len(hits) >= GLOBAL_RATE_LIMIT:
+            return JSONResponse(
+                status_code=429,
+                content={"success": False, "error": "Juda ko'p so'rov. Keyinroq urinib ko'ring."},
+            )
+        hits.append(now)
+
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_BODY_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"success": False, "error": "So'rov hajmi juda katta"},
+        )
+
+    return await call_next(request)
+
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
