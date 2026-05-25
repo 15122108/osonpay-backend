@@ -12,6 +12,11 @@ from app.services.commission import credit_commission
 
 router = APIRouter()
 COMMISSION_RATE = 0.01
+HOME_SERVICES = [
+    {"id": "mobile", "name": "Mobil operatorlar", "badge": "1%"},
+    {"id": "internet", "name": "Internet provayderlar", "badge": "1%"},
+    {"id": "utilities", "name": "Kommunal to'lovlar", "badge": "1%"},
+]
 
 class SendReq(BaseModel):
     receiverPhone: str
@@ -253,6 +258,43 @@ async def stats(uid: str = Depends(get_user)):
             "total_count": row["total_count"],
             "commission_rate": COMMISSION_RATE,
         }
+    }
+
+
+@router.get("/home-summary")
+async def home_summary(uid: str = Depends(get_user)):
+    tx_rows = await database.fetch_all(
+        """SELECT t.*,
+               s.full_name as sender_name, s.phone as sender_phone,
+               r.full_name as receiver_name, r.phone as receiver_phone
+            FROM transactions t
+            LEFT JOIN users s ON s.id = t.sender_id
+            LEFT JOIN users r ON r.id = t.receiver_id
+            WHERE (t.sender_id=:uid OR t.receiver_id=:uid)
+            ORDER BY t.created_at DESC
+            LIMIT 4""",
+        {"uid": uid},
+    )
+    stat_row = await database.fetch_one(
+        """SELECT
+              COALESCE(SUM(CASE WHEN receiver_id=:uid THEN amount ELSE 0 END), 0) AS total_in,
+              COALESCE(SUM(CASE WHEN sender_id=:uid THEN amount + fee ELSE 0 END), 0) AS total_out,
+              COALESCE(SUM(fee), 0) AS total_fee,
+              COUNT(*) AS total_count
+           FROM transactions
+           WHERE sender_id=:uid OR receiver_id=:uid""",
+        {"uid": uid},
+    )
+    return {
+        "transactions": [dict(r) for r in tx_rows],
+        "stats": {
+            "total_in": float(stat_row["total_in"]),
+            "total_out": float(stat_row["total_out"]),
+            "total_fee": float(stat_row["total_fee"]),
+            "total_count": stat_row["total_count"],
+            "commission_rate": COMMISSION_RATE,
+        },
+        "services": HOME_SERVICES,
     }
 
 

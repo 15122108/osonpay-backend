@@ -207,6 +207,8 @@ async def run_migrations():
     await database.execute("CREATE INDEX IF NOT EXISTS idx_tx_sender         ON transactions(sender_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_tx_receiver       ON transactions(receiver_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_tx_created        ON transactions(created_at DESC)")
+    await database.execute("CREATE INDEX IF NOT EXISTS idx_tx_sender_created ON transactions(sender_id, created_at DESC)")
+    await database.execute("CREATE INDEX IF NOT EXISTS idx_tx_receiver_created ON transactions(receiver_id, created_at DESC)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token    ON sessions(token)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user     ON sessions(user_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_audit_user        ON audit_logs(user_id)")
