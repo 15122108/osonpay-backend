@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oson Pay Admin</title>
+  <style>
+    :root{font-family:Inter,Arial,sans-serif;color:#1f2937;background:#f5f7fa}
+    body{margin:0;background:#f5f7fa}
+    header{height:56px;background:#fff;border-bottom:1px solid #e3e8ef;display:flex;align-items:center;justify-content:space-between;padding:0 18px;position:sticky;top:0;z-index:2}
+    h1{font-size:18px;margin:0}.brand{font-weight:900;color:#2563eb}.wrap{display:grid;grid-template-columns:210px 1fr;min-height:calc(100vh - 56px)}
+    nav{background:#fff;border-right:1px solid #e3e8ef;padding:12px}.tab{width:100%;border:0;background:transparent;text-align:left;padding:11px 12px;border-radius:10px;font-weight:800;color:#64748b;cursor:pointer}.tab.on{background:#eaf1ff;color:#2563eb}
+    main{padding:18px;max-width:1280px}.card{background:#fff;border:1px solid #e3e8ef;border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:0 8px 22px rgba(15,23,42,.04)}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}.stat{background:#f8fafc;border:1px solid #e3e8ef;border-radius:12px;padding:14px}.stat b{display:block;font-size:22px;margin-top:6px}.muted{color:#64748b;font-size:13px}
+    input,select,textarea{width:100%;box-sizing:border-box;border:1px solid #dbe3ee;border-radius:10px;padding:10px 12px;font:inherit;background:#fff;color:#111827}textarea{min-height:86px}
+    button{border:0;background:#2563eb;color:#fff;border-radius:10px;padding:10px 14px;font-weight:900;cursor:pointer}button.secondary{background:#e2e8f0;color:#334155}button.danger{background:#dc2626}button.ok{background:#16a34a}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.row button{flex:0 0 auto}
+    table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:10px;border-bottom:1px solid #edf2f7;text-align:left;vertical-align:top}th{color:#64748b;font-size:11px;text-transform:uppercase}code{font-family:Consolas,monospace;font-size:12px}
+    .badge{display:inline-block;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:900;background:#e2e8f0}.high,.critical{background:#fee2e2;color:#991b1b}.medium{background:#fef3c7;color:#92400e}.low{background:#dcfce7;color:#166534}
+    .hide{display:none}.msg{white-space:pre-wrap;color:#64748b}.login{max-width:380px;margin:80px auto}
+    @media(max-width:760px){.wrap{grid-template-columns:1fr}nav{display:flex;overflow:auto;border-right:0;border-bottom:1px solid #e3e8ef}.tab{white-space:nowrap}}
+  </style>
+</head>
+<body>
+<header><h1><span class="brand">Oson Pay</span> Admin</h1><button class="secondary" onclick="logout()">Chiqish</button></header>
+
+<section id="login" class="login card">
+  <h2>Kirish</h2>
+  <p class="muted">Backend URL shu panel ochilgan domen bo'yicha olinadi.</p>
+  <label>Login</label><input id="user" value="admin">
+  <label>Parol</label><input id="pass" type="password">
+  <p><button onclick="login()">Kirish</button></p>
+  <div id="loginMsg" class="msg"></div>
+</section>
+
+<section id="app" class="hide">
+  <div class="wrap">
+    <nav>
+      <button class="tab on" onclick="show('dashboard')">Dashboard</button>
+      <button class="tab" onclick="show('users')">Users</button>
+      <button class="tab" onclick="show('tx')">Transactions</button>
+      <button class="tab" onclick="show('fraud')">AI Fraud</button>
+      <button class="tab" onclick="show('notify')">Xabarlar</button>
+      <button class="tab" onclick="show('audit')">Audit</button>
+    </nav>
+    <main>
+      <div id="dashboard" class="page"></div>
+      <div id="users" class="page hide"></div>
+      <div id="tx" class="page hide"></div>
+      <div id="fraud" class="page hide"></div>
+      <div id="notify" class="page hide"></div>
+      <div id="audit" class="page hide"></div>
+    </main>
+  </div>
+</section>
+
+<script>
+const API = location.origin + '/api/admin';
+let token = localStorage.getItem('adminToken') || '';
+
+function headers(){return {'Content-Type':'application/json','Authorization':'Bearer '+token}}
+async function req(path, opts={}){
+  const r = await fetch(API+path,{...opts,headers:{...headers(),...(opts.headers||{})}});
+  const d = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.error||d.detail||'HTTP '+r.status);
+  return d;
+}
+function fmt(n){return Number(n||0).toLocaleString('uz-UZ')}
+function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function badge(v){return `<span class="badge ${esc(v)}">${esc(v||'-')}</span>`}
+
+async function login(){
+  loginMsg.textContent='Tekshirilmoqda...';
+  try{
+    const d=await fetch(API+'/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.value,password:pass.value})}).then(async r=>{const j=await r.json();if(!r.ok)throw new Error(j.error||j.detail);return j});
+    token=d.token; localStorage.setItem('adminToken',token); boot();
+  }catch(e){loginMsg.textContent=e.message}
+}
+function logout(){localStorage.removeItem('adminToken'); location.reload()}
+function boot(){login.classList.add('hide'); app.classList.remove('hide'); loadDashboard()}
+function show(id){
+  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('on'));
+  event?.target?.classList.add('on');
+  document.querySelectorAll('.page').forEach(p=>p.classList.add('hide'));
+  document.getElementById(id).classList.remove('hide');
+  ({dashboard:loadDashboard,users:loadUsers,tx:loadTx,fraud:loadFraud,notify:loadNotify,audit:loadAudit}[id])();
+}
+
+async function loadDashboard(){
+  dashboard.innerHTML='<div class="card">Yuklanmoqda...</div>';
+  try{
+    const d=await req('/stats');
+    dashboard.innerHTML=`<div class="grid">
+      <div class="stat"><span class="muted">Users</span><b>${fmt(d.users.total)}</b></div>
+      <div class="stat"><span class="muted">Active</span><b>${fmt(d.users.active)}</b></div>
+      <div class="stat"><span class="muted">Today tx</span><b>${fmt(d.transactions.today_count)}</b></div>
+      <div class="stat"><span class="muted">Today volume</span><b>${fmt(d.transactions.today_volume)}</b></div>
+      <div class="stat"><span class="muted">Total wallet</span><b>${fmt(d.wallets.total_balance)}</b></div>
+      <div class="stat"><span class="muted">KYC pending</span><b>${fmt(d.kyc.pending)}</b></div>
+    </div>`;
+  }catch(e){dashboard.innerHTML='<div class="card msg">'+esc(e.message)+'</div>'}
+}
+
+async function loadUsers(){
+  users.innerHTML='<div class="card"><div class="row"><input id="userSearch" placeholder="Telefon yoki ism"><button onclick="loadUsersList()">Qidirish</button></div></div><div id="usersList" class="card">Yuklanmoqda...</div>';
+  loadUsersList();
+}
+async function loadUsersList(){
+  const q=document.getElementById('userSearch')?.value||'';
+  const d=await req('/users?limit=50&search='+encodeURIComponent(q));
+  usersList.innerHTML=`<table><tr><th>Telefon</th><th>Ism</th><th>Balans</th><th>Holat</th><th>Action</th></tr>${d.users.map(u=>`<tr>
+    <td><code>${esc(u.phone)}</code></td><td>${esc(u.full_name)}</td><td>${fmt(u.balance)}</td><td>${u.is_blocked?badge('blocked'):badge('active')}</td>
+    <td><button class="secondary" onclick="notifyUser('${u.id}','${esc(u.phone)}')">Xabar</button> <button class="danger" onclick="blockUser('${u.id}')">Blok</button></td>
+  </tr>`).join('')}</table>`;
+}
+async function blockUser(id){const reason=prompt('Sabab')||''; await req('/users/'+id+'/block',{method:'POST',body:JSON.stringify({reason})}); loadUsersList()}
+
+async function loadTx(){
+  tx.innerHTML='<div class="card">Yuklanmoqda...</div>';
+  const d=await req('/transactions?limit=100');
+  tx.innerHTML=`<div class="card"><table><tr><th>Sana</th><th>Tur</th><th>Summa</th><th>Fee</th><th>Sender</th><th>Receiver</th></tr>${d.transactions.map(t=>`<tr>
+    <td>${esc(t.created_at)}</td><td>${esc(t.type)}</td><td>${fmt(t.amount)}</td><td>${fmt(t.fee)}</td><td>${esc(t.sender_phone)}</td><td>${esc(t.receiver_phone)}</td>
+  </tr>`).join('')}</table></div>`;
+}
+
+async function loadFraud(){
+  fraud.innerHTML=`<div class="card"><h2>AI P2P nazorat</h2><div class="row"><select id="risk"><option value="">Barchasi</option><option>medium</option><option>high</option><option>critical</option></select><button onclick="loadFraudList()">Yangilash</button></div></div><div id="fraudList" class="card">Yuklanmoqda...</div>`;
+  loadFraudList();
+}
+async function loadFraudList(){
+  const r=document.getElementById('risk')?.value||'';
+  const d=await req('/fraud-logs?limit=100&risk_level='+encodeURIComponent(r));
+  fraudList.innerHTML=`<table><tr><th>Sana</th><th>Risk</th><th>Action</th><th>Summa</th><th>Sender</th><th>Receiver</th><th>Sabab</th></tr>${d.logs.map(f=>`<tr>
+    <td>${esc(f.created_at)}</td><td>${badge(f.risk_level)}</td><td>${badge(f.action)}</td><td>${fmt(f.amount)}</td><td>${esc(f.sender_phone)}</td><td>${esc(f.receiver_phone)}</td><td><code>${esc(f.reasons)}</code></td>
+  </tr>`).join('')}</table>`;
+}
+
+function loadNotify(){
+  notify.innerHTML=`<div class="card"><h2>Hammaga xabar yuborish</h2><label>Sarlavha</label><input id="ntitle"><label>Matn</label><textarea id="nbody"></textarea><p><button onclick="broadcast()">Yuborish</button></p><div id="nmsg" class="msg"></div></div>`;
+}
+async function broadcast(){
+  nmsg.textContent='Yuborilmoqda...';
+  try{const d=await req('/notifications/broadcast',{method:'POST',body:JSON.stringify({title:ntitle.value,body:nbody.value,data:{type:'admin_broadcast'}})}); nmsg.textContent='Yuborildi. Tokenlar: '+d.tokens}
+  catch(e){nmsg.textContent=e.message}
+}
+function notifyUser(id, phone){
+  const title=prompt(phone+' uchun sarlavha'); if(!title)return;
+  const body=prompt('Xabar matni'); if(!body)return;
+  req('/users/'+id+'/notify',{method:'POST',body:JSON.stringify({title,body,data:{type:'admin_message'}})}).then(()=>alert('Yuborildi')).catch(e=>alert(e.message));
+}
+
+async function loadAudit(){
+  audit.innerHTML='<div class="card">Yuklanmoqda...</div>';
+  const d=await req('/audit-logs?limit=100');
+  audit.innerHTML=`<div class="card"><table><tr><th>Sana</th><th>Action</th><th>User</th><th>IP</th><th>Details</th></tr>${d.logs.map(l=>`<tr>
+    <td>${esc(l.created_at)}</td><td>${esc(l.action)}</td><td>${esc(l.phone||l.user_id)}</td><td>${esc(l.ip_address)}</td><td><code>${esc(l.details)}</code></td>
+  </tr>`).join('')}</table></div>`;
+}
+
+if(token) boot();
+</script>
+</body>
+</html>

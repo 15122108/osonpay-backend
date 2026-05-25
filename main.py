@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from contextlib import asynccontextmanager
 from app.database import database
 from app.migrations import run_migrations
@@ -115,6 +115,10 @@ app.include_router(payme.router,        prefix="/api",              tags=["provi
 @app.get("/")
 async def root():
     return {"status": "ok", "app": "Oson Pay", "version": "2.0.0"}
+
+@app.get("/admin", include_in_schema=False)
+async def admin_panel():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "admin_panel.html"))
 
 @app.get("/api/health")
 async def health():
