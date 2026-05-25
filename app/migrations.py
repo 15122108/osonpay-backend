@@ -169,6 +169,25 @@ async def run_migrations():
     """)
 
     await database.execute("""
+        CREATE TABLE IF NOT EXISTS service_payments (
+            id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id        UUID REFERENCES users(id),
+            provider       VARCHAR(40) NOT NULL,
+            category       VARCHAR(40) NOT NULL,
+            account        VARCHAR(80) NOT NULL,
+            amount         DECIMAL(15,2) NOT NULL,
+            fee            DECIMAL(15,2) DEFAULT 0.00,
+            total          DECIMAL(15,2) NOT NULL,
+            reference      VARCHAR(50) UNIQUE NOT NULL,
+            provider_tx_id VARCHAR(100),
+            status         VARCHAR(20) DEFAULT 'pending',
+            raw_response   TEXT,
+            created_at     TIMESTAMP DEFAULT NOW(),
+            updated_at     TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+    await database.execute("""
         CREATE TABLE IF NOT EXISTS payme_transactions (
             id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             payme_id     VARCHAR(100) UNIQUE NOT NULL,
@@ -196,6 +215,9 @@ async def run_migrations():
     await database.execute("CREATE INDEX IF NOT EXISTS idx_fraud_sender      ON fraud_logs(sender_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_pending_pid       ON pending_payments(paytech_payment_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_pending_user      ON pending_payments(user_id)")
+    await database.execute("CREATE INDEX IF NOT EXISTS idx_service_ref       ON service_payments(reference)")
+    await database.execute("CREATE INDEX IF NOT EXISTS idx_service_user      ON service_payments(user_id)")
+    await database.execute("CREATE INDEX IF NOT EXISTS idx_service_provider  ON service_payments(provider_tx_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_payme_tx          ON payme_transactions(payme_id)")
     await database.execute("CREATE INDEX IF NOT EXISTS idx_payme_user        ON payme_transactions(user_id)")
 
