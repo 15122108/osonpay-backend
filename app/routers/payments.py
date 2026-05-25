@@ -9,21 +9,18 @@ from app.utils.deps import get_user
 from app.utils.auth import gen_ref
 from app.utils.rate_limit import check_rate_limit, get_client_ip
 from app.utils import audit
-from app.services.paytech import (
-    create_topup_payment,
-    get_payment_status,
-    verify_webhook_signature,
-    parse_webhook,
-)
 from app.services.commission import credit_commission
 from app.services.fcm import notify_transaction
-from app.services.paysys import mobile_configured, mobile_info, mobile_pay, mobile_status
+from app.services.payment_gateway import get_payment_gateway
+from app.services.service_gateway import get_service_gateway
 import os
 
 router = APIRouter()
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://your-frontend.com")
 COMMISSION_RATE = 0.01
+payment_gateway = get_payment_gateway()
+service_gateway = get_service_gateway()
 
 
 class TopUpInitReq(BaseModel):
@@ -45,7 +42,7 @@ def calc_fee(amount: float) -> float:
 
 SERVICE_ITEMS = [
     {"id": "popular", "name": "Ko'p qo'llaniladigan", "icon": "list", "category": "popular", "badge": "1%"},
-    {"id": "mobile", "name": "Mobil operatorlar", "icon": "phone", "category": "mobile", "badge": "1%", "real": mobile_configured()},
+    {"id": "mobile", "name": "Mobil operatorlar", "icon": "phone", "category": "mobile", "badge": "1%", "real": service_gateway.mobile_configured(), "provider": service_gateway.name},
     {"id": "internet", "name": "Internet provayderlar", "icon": "globe", "category": "internet", "badge": "1%"},
     {"id": "utilities", "name": "Kommunal to'lovlar", "icon": "home", "category": "utilities", "badge": "1%"},
     {"id": "bank", "name": "Bank xizmatlari", "icon": "bank", "category": "bank", "badge": "1%"},
@@ -68,6 +65,20 @@ async def services(uid: str = Depends(get_user)):
     return {"items": SERVICE_ITEMS}
 
 
+@router.get("/providers")
+async def providers(uid: str = Depends(get_user)):
+    return {
+        "payment": {
+            "provider": payment_gateway.name,
+            "configured": payment_gateway.configured(),
+        },
+        "service_payment": {
+            "provider": service_gateway.name,
+            "mobile_configured": service_gateway.mobile_configured(),
+        },
+    }
+
+
 def _clean_phone_number(phone: str) -> str:
     clean = "".join(ch for ch in str(phone or "") if ch.isdigit())
     if clean.startswith("998") and len(clean) == 12:
@@ -81,7 +92,7 @@ def _clean_phone_number(phone: str) -> str:
 async def mobile_operator_info(b: MobileInfoReq, uid: str = Depends(get_user)):
     phone = _clean_phone_number(b.phone_number)
     try:
-        result = await mobile_info(phone)
+        result = await service_gateway.mobile_info(phone)
     except Exception as e:
         raise HTTPException(502, f"Mobil to'lov provayderi xatosi: {str(e)}")
     return {"success": True, "info": result}
@@ -115,8 +126,8 @@ async def mobile_operator_pay(b: MobilePayReq, request: Request, uid: str = Depe
         await database.execute(
             """INSERT INTO service_payments
                (user_id, provider, category, account, amount, fee, total, reference, status)
-               VALUES (:uid, 'paysys', 'mobile', :account, :amount, :fee, :total, :ref, 'pending')""",
-            {"uid": uid, "account": phone, "amount": b.amount, "fee": fee, "total": total, "ref": ref},
+               VALUES (:uid, :provider, 'mobile', :account, :amount, :fee, :total, :ref, 'pending')""",
+            {"uid": uid, "provider": service_gateway.name, "account": phone, "amount": b.amount, "fee": fee, "total": total, "ref": ref},
         )
         await database.execute(
             "UPDATE wallets SET balance=balance-:total, updated_at=NOW() WHERE user_id=:uid",
@@ -124,7 +135,7 @@ async def mobile_operator_pay(b: MobilePayReq, request: Request, uid: str = Depe
         )
 
     try:
-        provider_result = await mobile_pay(phone, b.amount, ref)
+        provider_result = await service_gateway.mobile_pay(phone, b.amount, ref)
         provider_tx_id = str(provider_result.get("transaction_id") or "")
         status_code = int(provider_result.get("status", -1))
         status = "completed" if status_code == 2 else ("pending" if status_code in (0, 1, 7) else "failed")
@@ -198,7 +209,7 @@ async def mobile_operator_status(reference: str, uid: str = Depends(get_user)):
     if not payment["provider_tx_id"]:
         return {"success": True, "status": payment["status"]}
     try:
-        result = await mobile_status(payment["provider_tx_id"])
+        result = await service_gateway.mobile_status(payment["provider_tx_id"])
     except Exception:
         return {"success": True, "status": payment["status"]}
     status_code = int(result.get("status", -1))
@@ -244,7 +255,7 @@ async def topup_init(b: TopUpInitReq, request: Request, uid: str = Depends(get_u
     )
 
     try:
-        result = await create_topup_payment(
+        result = await payment_gateway.create_topup_payment(
             user_id=uid,
             amount=b.amount,
             phone=user["phone"],
@@ -289,7 +300,7 @@ async def paytech_webhook(request: Request):
     signature = request.headers.get("X-Signature", "")
 
     # Imzoni tekshirish
-    if not verify_webhook_signature(raw_body, signature):
+    if not payment_gateway.verify_webhook_signature(raw_body, signature):
         await audit.log("webhook_invalid_signature", details={"sig": signature})
         raise HTTPException(401, "Imzo noto'g'ri")
 
@@ -298,7 +309,7 @@ async def paytech_webhook(request: Request):
     except Exception:
         raise HTTPException(400, "JSON xato")
 
-    data = parse_webhook(body)
+    data = payment_gateway.parse_webhook(body)
     payment_id = data.get("payment_id")
     state = data.get("state")
     amount_tiyin = data.get("amount", 0)
@@ -428,7 +439,7 @@ async def payment_status(payment_id: str, uid: str = Depends(get_user)):
     # Agar hali pending bo'lsa, PayTech dan so'rash
     if pending["status"] == "initiated":
         try:
-            live = await get_payment_status(payment_id)
+            live = await payment_gateway.get_payment_status(payment_id)
             return {
                 "success": True,
                 "status": live["state"],
