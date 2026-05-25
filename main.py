@@ -57,6 +57,19 @@ def _admin_allowed_ips() -> set[str]:
     return {ip.strip() for ip in raw.split(",") if ip.strip()}
 
 
+def _admin_panel_allowed(request: Request) -> bool:
+    allowed_ips = _admin_allowed_ips()
+    if allowed_ips and _client_ip(request) in allowed_ips:
+        return True
+
+    panel_key = os.getenv("ADMIN_PANEL_KEY", "")
+    if panel_key:
+        supplied_key = request.query_params.get("key") or request.cookies.get("admin_panel_key")
+        return supplied_key == panel_key
+
+    return os.getenv("NODE_ENV") != "production"
+
+
 @app.middleware("http")
 async def request_guard(request: Request, call_next):
     if request.url.path not in ("/", "/api/health"):
@@ -123,13 +136,23 @@ async def root():
 
 @app.get("/admin", include_in_schema=False)
 async def admin_panel(request: Request):
-    allowed_ips = _admin_allowed_ips()
-    if allowed_ips and _client_ip(request) not in allowed_ips:
+    if not _admin_panel_allowed(request):
         return JSONResponse(
             status_code=404,
             content={"success": False, "error": "Topilmadi"},
         )
-    return FileResponse(os.path.join(os.path.dirname(__file__), "admin_panel.html"))
+    response = FileResponse(os.path.join(os.path.dirname(__file__), "admin_panel.html"))
+    panel_key = os.getenv("ADMIN_PANEL_KEY", "")
+    if panel_key and request.query_params.get("key") == panel_key:
+        response.set_cookie(
+            "admin_panel_key",
+            panel_key,
+            httponly=True,
+            secure=os.getenv("NODE_ENV") == "production",
+            samesite="strict",
+            max_age=60 * 60 * 8,
+        )
+    return response
 
 @app.get("/api/health")
 async def health():
