@@ -8,7 +8,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from passlib.context import CryptContext
 from app.services.fcm import get_user_tokens, send_push
 from app.services.ai_fraud import check_transaction
+from collections import defaultdict, deque
 import os
+import time
 
 router = APIRouter()
 security = HTTPBearer()
@@ -16,10 +18,23 @@ pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_LOGIN_LIMIT_PER_MINUTE = int(os.getenv("ADMIN_LOGIN_LIMIT_PER_MINUTE", "5"))
+_admin_login_hits: dict[str, deque[float]] = defaultdict(deque)
+
+def _check_admin_login_rate(ip: str):
+    now = time.time()
+    hits = _admin_login_hits[ip]
+    while hits and hits[0] < now - 60:
+        hits.popleft()
+    if len(hits) >= ADMIN_LOGIN_LIMIT_PER_MINUTE:
+        raise HTTPException(429, "Admin kirish urinishlari ko'p. Keyinroq urinib ko'ring.")
+    hits.append(now)
 
 async def get_admin(creds: HTTPAuthorizationCredentials = Depends(security)):
     try:
         data = decode_admin_token(creds.credentials)
+        if data.get("role") != "admin":
+            raise Exception("Admin role emas")
         return data
     except Exception:
         raise HTTPException(401, "Admin token yaroqsiz")
@@ -54,6 +69,7 @@ class AnalyzeP2PReq(BaseModel):
 @router.post("/login")
 async def admin_login(b: AdminLoginReq, request: Request):
     ip = get_client_ip(request)
+    _check_admin_login_rate(ip)
     if not ADMIN_PASSWORD:
         raise HTTPException(503, "Admin sozlanmagan")
     if b.username != ADMIN_USERNAME or b.password != ADMIN_PASSWORD:

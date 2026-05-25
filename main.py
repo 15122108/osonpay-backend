@@ -52,6 +52,11 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _admin_allowed_ips() -> set[str]:
+    raw = os.getenv("ADMIN_ALLOWED_IPS", "")
+    return {ip.strip() for ip in raw.split(",") if ip.strip()}
+
+
 @app.middleware("http")
 async def request_guard(request: Request, call_next):
     if request.url.path not in ("/", "/api/health"):
@@ -117,7 +122,13 @@ async def root():
     return {"status": "ok", "app": "Oson Pay", "version": "2.0.0"}
 
 @app.get("/admin", include_in_schema=False)
-async def admin_panel():
+async def admin_panel(request: Request):
+    allowed_ips = _admin_allowed_ips()
+    if allowed_ips and _client_ip(request) not in allowed_ips:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Topilmadi"},
+        )
     return FileResponse(os.path.join(os.path.dirname(__file__), "admin_panel.html"))
 
 @app.get("/api/health")
