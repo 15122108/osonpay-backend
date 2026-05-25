@@ -21,7 +21,7 @@ class OTPReq(BaseModel):
 class VerifyReq(BaseModel):
     phone: str
     code: str
-    fullName: str = "Foydalanuvchi"
+    fullName: str | None = None
 
 class PinReq(BaseModel):
     pin: str
@@ -93,8 +93,8 @@ async def verify_otp(b: VerifyReq, request: Request):
             has_pin = bool(user["pin_hash"])
         else:
             row = await database.fetch_one(
-                "INSERT INTO users(phone,full_name,is_verified) VALUES(:p,:n,TRUE) RETURNING id",
-                {"p": b.phone, "n": b.fullName}
+                "INSERT INTO users(phone,full_name,is_verified) VALUES(:p,:n,FALSE) RETURNING id",
+                {"p": b.phone, "n": b.fullName.strip() if b.fullName else None}
             )
             uid = str(row["id"])
             await database.execute(
@@ -115,7 +115,12 @@ async def verify_otp(b: VerifyReq, request: Request):
         "success": True,
         "token":   token,
         "hasPin":  has_pin,
-        "user":    {"id": uid, "phone": b.phone, "fullName": b.fullName}
+        "user":    {
+            "id": uid,
+            "phone": b.phone,
+            "fullName": user["full_name"] if user else (b.fullName.strip() if b.fullName else None),
+            "isNewUser": user is None,
+        }
     }
 
 
