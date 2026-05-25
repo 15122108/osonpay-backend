@@ -7,6 +7,7 @@ from app.utils.auth import mask_card, tokenize_card, gen_ref
 from app.utils import audit
 from app.utils.rate_limit import get_client_ip
 from app.services.commission import credit_commission
+from app.services.card_validation import expiry_ok, validate_card_number
 
 router = APIRouter()
 COMMISSION_RATE = 0.01
@@ -53,9 +54,12 @@ async def get_cards(uid: str = Depends(get_user)):
 
 @router.post("")
 async def add_card(b: CardReq, request: Request, uid: str = Depends(get_user)):
-    clean = b.cardNumber.replace(" ", "")
-    if len(clean) != 16 or not clean.isdigit():
-        raise HTTPException(400, "16 ta raqam kerak")
+    try:
+        clean, detected_type = validate_card_number(b.cardNumber)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not expiry_ok(b.expiryMonth, b.expiryYear):
+        raise HTTPException(400, "Karta muddati noto'g'ri yoki tugagan")
 
     token = tokenize_card(clean)
     ex = await database.fetch_one(
@@ -70,7 +74,7 @@ async def add_card(b: CardReq, request: Request, uid: str = Depends(get_user)):
         {"uid": uid}
     )
     is_def = cnt["c"] == 0
-    cf, ct = COLORS.get(b.cardType, COLORS["uzcard"])
+    cf, ct = COLORS.get(detected_type, COLORS["uzcard"])
     masked = mask_card(clean)
 
     c = await database.fetch_one(
@@ -83,14 +87,14 @@ async def add_card(b: CardReq, request: Request, uid: str = Depends(get_user)):
         {
             "u": uid, "masked": masked, "token": token,
             "h": b.cardHolder.upper(), "m": b.expiryMonth,
-            "y": b.expiryYear, "t": b.cardType, "d": is_def,
+            "y": b.expiryYear, "t": detected_type, "d": is_def,
             "cf": cf, "ct": ct
         }
     )
     await audit.log(
         "card_added", user_id=uid,
         entity_type="card", entity_id=str(c["id"]),
-        details={"masked": masked, "type": b.cardType},
+        details={"masked": masked, "type": detected_type},
         ip_address=get_client_ip(request)
     )
     return {"success": True, "card": dict(c)}
@@ -149,9 +153,10 @@ async def card_transfer(b: CardTransferReq, request: Request, uid: str = Depends
     if not wallet or float(wallet["balance"]) < debit_amount:
         raise HTTPException(400, "Mablag' yetarli emas")
 
-    clean = b.to_card_number.replace(" ", "")
-    if len(clean) != 16 or not clean.isdigit():
-        raise HTTPException(400, "Karta raqami noto'g'ri")
+    try:
+        clean, _ = validate_card_number(b.to_card_number)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
     token = tokenize_card(clean)
     to_card = await database.fetch_one(
